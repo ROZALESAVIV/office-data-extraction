@@ -8,3 +8,7 @@ __pycache__/
 
 # OS
 .DS_Store
+.env.example
+.gitignore
+CLAUDE.md
+

@@ -1,0 +1,33 @@
+# Web framework
+fastapi
+uvicorn[standard]
+
+# Database
+sqlalchemy
+alembic
+psycopg2-binary
+
+# PDF processing — text-based PDFs
+pdfplumber
+
+# PDF processing — scanned/image PDFs (OCR)
+pytesseract
+pdf2image
+pillow
+
+# AI extraction
+anthropic
+
+# File uploads & async file I/O
+python-multipart
+aiofiles
+
+# Environment & config
+python-dotenv
+pydantic
+pydantic-settings
+
+# Auth
+passlib[bcrypt]
+python-jose[cryptography]
+bcrypt
