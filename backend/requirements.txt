@@ -1,0 +1,10 @@
+sqlalchemy>=2.0
+alembic
+psycopg2-binary
+pydantic-settings
+python-dotenv
+fastapi
+uvicorn[standard]
+python-jose[cryptography]
+passlib[bcrypt]
+python-multipart
