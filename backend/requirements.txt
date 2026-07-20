@@ -9,3 +9,4 @@ bcrypt
 python-multipart
 anthropic
 boto3
+supabase
