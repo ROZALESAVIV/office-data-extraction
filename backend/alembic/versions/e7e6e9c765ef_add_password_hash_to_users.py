@@ -7,9 +7,9 @@ Create Date: 2026-06-20 22:00:28.736940
 """
 from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
 
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision: str = 'e7e6e9c765ef'
@@ -19,7 +19,14 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column('users', sa.Column('password_hash', sa.Text(), nullable=False))
+    # A bare NOT NULL column with no default cannot be added to a table that
+    # already has rows. Add it with a placeholder that no bcrypt check can ever
+    # match, then drop the default so new inserts must supply a real hash.
+    op.add_column(
+        'users',
+        sa.Column('password_hash', sa.Text(), nullable=False, server_default=''),
+    )
+    op.alter_column('users', 'password_hash', server_default=None)
 
 
 def downgrade() -> None:

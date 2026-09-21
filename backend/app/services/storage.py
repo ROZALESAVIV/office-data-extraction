@@ -1,41 +1,101 @@
-from fastapi import HTTPException
-from supabase import create_client
+"""Supabase Storage.
 
-from config import settings
+Two rules this module exists to enforce:
 
-supabase = create_client(settings.supabase_url, settings.supabase_service_key)
+1. The storage key is built from UUIDs only and validated before every call.
+   A user-supplied filename never reaches it, so path traversal is impossible
+   by construction rather than by filtering.
+2. No HTTP exceptions. This is called from background jobs where there is no
+   request to return a status code to; routers translate these errors.
+"""
 
-_bucket = settings.supabase_bucket
+import re
+from functools import lru_cache
+
+from app.core.config import settings
+
+# {tenant}/{case}/{document}.{ext} - three UUIDs and a known extension.
+_KEY_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/"
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/"
+    r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
+    r"(?:\.preview)?\.(pdf|docx|eml)$"
+)
 
 
-def upload_file(file_bytes: bytes, tenant_id: str, case_id: str, filename: str) -> str:
-    path = f"{tenant_id}/{case_id}/{filename}"
+class StorageError(RuntimeError):
+    """Storage operation failed."""
+
+
+class StorageNotFound(StorageError):
+    """The object does not exist."""
+
+
+def build_key(tenant_id, case_id, document_id, ext: str, preview: bool = False) -> str:
+    suffix = ".preview" if preview else ""
+    return f"{tenant_id}/{case_id}/{document_id}{suffix}.{ext}"
+
+
+def _check(key: str) -> str:
+    if not _KEY_RE.fullmatch(key):
+        raise StorageError(f"unsafe storage key: {key!r}")
+    return key
+
+
+@lru_cache(maxsize=1)
+def _client():
+    """Built on first use, not at import.
+
+    A module-level client makes this module unimportable without Supabase
+    credentials, which alone blocks every unit test that merely imports a
+    router.
+    """
+    from supabase import create_client
+
+    if not settings.supabase_url or not settings.supabase_service_key:
+        raise StorageError("Supabase storage is not configured")
+    return create_client(settings.supabase_url, settings.supabase_service_key)
+
+
+def _bucket():
+    return _client().storage.from_(settings.supabase_bucket)
+
+
+def upload(key: str, blob: bytes, content_type: str) -> str:
+    _check(key)
     try:
-        supabase.storage.from_(_bucket).upload(path, file_bytes)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Storage upload failed: {e}")
-    return path
+        _bucket().upload(key, blob, {"content-type": content_type, "upsert": "false"})
+    except Exception as exc:
+        raise StorageError(f"upload failed for {key}") from exc
+    return key
 
 
-def delete_file(storage_path: str) -> None:
+def download(key: str) -> bytes:
+    _check(key)
     try:
-        supabase.storage.from_(_bucket).remove([storage_path])
-    except Exception:
-        pass  # already gone or bucket missing — safe to ignore
+        return _bucket().download(key)
+    except Exception as exc:
+        if "not found" in str(exc).lower() or "404" in str(exc):
+            raise StorageNotFound(key) from exc
+        raise StorageError(f"download failed for {key}") from exc
 
 
-def get_signed_url(storage_path: str, expires_in_seconds: int = 3600) -> str:
+def signed_url(key: str, expires_in_seconds: int = 900) -> str:
+    _check(key)
     try:
-        result = supabase.storage.from_(_bucket).create_signed_url(storage_path, expires_in_seconds)
-        return result["signedURL"]
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Could not generate signed URL: {e}")
+        result = _bucket().create_signed_url(key, expires_in_seconds)
+    except Exception as exc:
+        raise StorageError(f"could not sign {key}") from exc
+    url = result.get("signedURL") or result.get("signedUrl") or result.get("signed_url")
+    if not url:
+        raise StorageError(f"storage returned no signed URL for {key}")
+    return url
 
 
-def get_file_bytes(storage_path: str) -> bytes:
+def delete(key: str) -> None:
+    """Best effort, but never silent: the caller decides what a failure means."""
+    _check(key)
     try:
-        return supabase.storage.from_(_bucket).download(storage_path)
-    except Exception as e:
-        if "not found" in str(e).lower() or "404" in str(e):
-            raise HTTPException(status_code=404, detail="File not found in storage")
-        raise HTTPException(status_code=500, detail=f"Storage download failed: {e}")
+        _bucket().remove([key])
+    except Exception as exc:
+        raise StorageError(f"delete failed for {key}") from exc

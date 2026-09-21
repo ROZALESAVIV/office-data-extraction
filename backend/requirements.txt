@@ -8,5 +8,9 @@ python-jose[cryptography]
 bcrypt
 python-multipart
 anthropic
-boto3
 supabase
+
+# tests
+pytest
+pytest-cov
+httpx

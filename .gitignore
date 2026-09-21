@@ -4,7 +4,19 @@ dist/
 
 # Python
 __pycache__/
+*.py[cod]
 .env
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
 
 # OS
 .DS_Store
+.env.bak.*
+
+# real client documents — never commit
+samples/
+!samples/README.md
