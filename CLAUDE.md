@@ -189,7 +189,6 @@ Triggered as a `BackgroundTasks` job from the documents endpoint. The seam is de
 | Referral email wired into the pipeline | ✅ Done — 7 fields, no model call |
 | Startup recovery for stalled jobs | ✅ Done |
 | Review API | 🔲 **Next** |
-| Review API | 🔲 Planned |
 | Odcanit submission service | 🔲 Planned — connectivity model unresolved |
 | Frontend (React + Vite, RTL) | 🔲 Not started |
 

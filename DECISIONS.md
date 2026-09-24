@@ -429,3 +429,120 @@ consistency, not stated by the lawyer.
 **Why:** `claim_amount` in a subrogation case is explicitly manual entry - no
 document states it in a form worth trusting. A NULL `extracted_value` is
 honest: the model never claimed anything, so there is nothing to freeze.
+
+---
+
+## 29. What blocks submission
+
+The rule the readiness gate enforces, and that `POST /submit` recomputes.
+
+**Only reviewed data is ever submitted.** A field that no lawyer looked at does
+not go to Odcanit, whatever the model's confidence. That is the entire purpose
+of the product: unverified AI output reaching a legal CRM is the failure mode
+this exists to prevent.
+
+So submission carries only fields with `status IN ('confirmed','edited')`.
+Everything else is simply left out - not an error, just not sent.
+
+**Four things block:**
+
+1. **A required field that is not confirmed or edited.** Value present but
+   still `pending_review` blocks exactly as an empty one does - "the model
+   found it" is not the same as "a lawyer agreed".
+2. **A required field with a NULL value**, including one that was rejected.
+   (Decision 27: rejected means wrong, and a wrong required field still blocks.)
+3. **An unacknowledged conflict on a field being submitted** -
+   `has_conflict AND conflict_ack_at IS NULL`. Two documents disagree and
+   nobody chose; sending either is a coin toss. In practice confirm and
+   select-candidate both set `conflict_ack_at`, so this is a safety net rather
+   than an extra step.
+4. **A document still processing.** `pending` or `extracting` means a field
+   that is about to change.
+
+A failed or skipped document does **not** block: most of a case file is
+photographs, and a skipped photograph is the normal outcome.
+
+**Required means required for this case type.**
+
+The nine globally required fields (`case_type`, the four insurer references,
+the insured's name and ID, the driver's name, the third-party plate) are
+reachable in both case types and always required.
+
+In a **defence** case, four more become required, because the case is already
+in court and Odcanit needs them:
+
+```
+court_name   court_case_number   court_procedure_type   claim_amount
+```
+
+They carry `is_required=False` in `case_fields` on purpose - in a **claim**
+case the matter has not been filed, so there is no court and no case number.
+An empty court field there is a correct answer, and flagging it would train the
+lawyer to ignore the flags.
+
+`service_date` and `defence_deadline` are deliberately **not** blocking even in
+a defence case. The service stamp is frequently absent on real files, and the
+deadline is computed rather than read - blocking on either would stop every
+case for a field the document genuinely does not contain.
+
+**Readiness is advisory; `/submit` is the gate.** `GET /readiness` exists so
+the screen can show what remains. `POST /submit` recomputes the same rule
+server-side and returns 409 with an identical blockers payload. A client that
+skips the readiness call cannot submit an incomplete case.
+
+---
+
+## 30. Confidence thresholds
+
+```
+LOW_CONFIDENCE       0.75   below this, a field is flagged for attention
+BULK_CONFIRM_FLOOR   0.90   default bar for confirming in bulk
+```
+
+Both live in `app/reference/`, not in a router - they are product tuning, and
+they will move once extraction has been measured against a labelled set.
+
+**0.75** comes from the real run: correct values clustered at 0.85-1.00, while
+the fields worth a second look (an insured's address at 0.60, a driver's name
+at 0.66) sat below it.
+
+**Bulk confirm is stricter than the attention flag, and deliberately so.**
+Confirming forty fields in one click is still forty legal acts. A client may
+pass its own threshold but it is clamped at `LOW_CONFIDENCE` - anything the
+screen flagged has to be confirmed one at a time. Bulk also always excludes
+conflicted fields and anything with `always_needs_review`.
+
+---
+
+## 31. Only a failed snippet check counts against a field
+
+**Chosen:** `snippet_verified IS FALSE` raises `unverified_snippet`.
+`NULL` does not.
+
+**Why:** the column is tri-state. `False` means the quote was looked for on the
+page and was not there. `NULL` means there was no text layer to look in - which
+is the case for most documents here, since they are scans. Treating NULL as
+suspicious would flag almost every field and the signal would mean nothing.
+
+---
+
+## 32. `updated_at` is maintained by a trigger, not by routers
+
+**Chosen:** a `set_updated_at` trigger on `case_field_values`.
+
+**Why:** optimistic locking (Decision 25) compares `updated_at`. If routers
+maintain it by hand, one endpoint that forgets silently disables the locking on
+that path - and nothing fails visibly. Same reasoning as Decision 7: an
+invariant the database owns cannot be bypassed by a careless future endpoint.
+
+---
+
+## 33. A missing `expected_updated_at` asserts that no row exists
+
+**Chosen:** omitting it (or sending null) on `PATCH` means "I expect this field
+to have no row yet". If one has appeared since, the request gets 409.
+
+**Why:** Decision 28 allows editing a field that was never extracted, so the
+lock has to be able to express "nothing was here" as well as "this version was
+here". Without it, two lawyers typing a manual value into the same empty field
+would silently overwrite one another.
