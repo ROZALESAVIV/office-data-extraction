@@ -329,3 +329,103 @@ carries lower confidence to mark it as an assumption.
 
 **Never:** a computed deadline presented as a fact. It ignores court recess and
 granted extensions, so it is always shown as *computed - verify*.
+
+---
+
+## 24. The review API shape
+
+Designed before the extraction stage was built; recorded here because it lived
+only in a planning file that no later session can see.
+
+**Endpoints:**
+
+```
+GET    /cases/{id}/fields                    feeds the whole screen, one query
+GET    /cases/{id}/fields/{fid}/candidates   what each document said
+POST   /cases/{id}/fields/{fid}/confirm
+PATCH  /cases/{id}/fields/{fid}              edit
+POST   /cases/{id}/fields/{fid}/reject
+POST   /cases/{id}/fields/{fid}/select-candidate
+POST   /cases/{id}/fields/bulk-confirm
+GET    /cases/{id}/readiness
+```
+
+**One query for the screen.** `GET /fields` joins case_fields, values,
+candidates and documents with `joinedload`. N+1 here is the difference between
+80ms and 3s, and this endpoint is the product.
+
+**Every field in `case_fields` appears**, even with no value, so the checklist
+is complete and a missing required field is visible rather than absent.
+
+**Each field carries `attention_reasons`**: `conflict`, `low_confidence`,
+`unverified_snippet`, `missing_required` - plus its source as
+`{document_id, file_name, page, snippet}`, which is what drives the jump into
+the viewer.
+
+**Confirm refuses an empty value** (422). Nothing to confirm - edit or reject.
+
+**Edit never names `extracted_value` in the update statement**, and the trigger
+makes that unbypassable.
+
+**Reject clears `value` but keeps `extracted_value`** as the record of what the
+model claimed.
+
+**Select-candidate is how a conflict is actually resolved** - the lawyer picks
+the other document's value instead of retyping it. Sets `status='confirmed'`,
+updates `resolved_candidate_id`, fills `conflict_ack_at`.
+
+**Bulk-confirm** defaults to high confidence, excludes conflicted fields and
+anything with `always_needs_review`, and returns a per-field skip reason. It
+never skips silently.
+
+**Readiness is a convenience, never the enforcement point.** `POST /submit`
+recomputes it server-side and returns 409 with the identical blockers payload.
+
+---
+
+## 25. Optimistic locking on every field mutation
+
+**Chosen:** each single-field mutation takes `expected_updated_at` and returns
+409 on mismatch.
+
+**Why:** two lawyers in one case on a Monday morning is a real scenario, and
+last-write-wins would silently discard one of their decisions. The cost is one
+column comparison.
+
+---
+
+## 26. Opening the review screen does not change the case status
+
+**Chosen:** `ready_for_review -> in_review` is set by the first *mutation*, not
+by the first read.
+
+**Why:** a read should not have side effects, and this one has a real one -
+`in_review` is terminal in `_TERMINAL_CASE_STATUSES`, so from that moment a
+newly extracted document no longer moves the case status. A lawyer glancing at
+a case should not silently freeze it.
+
+---
+
+## 27. `rejected` means wrong, not inapplicable
+
+**Chosen:** `status='rejected'` means "the extracted value is wrong and I have
+no replacement". The field still blocks submission if it is required.
+
+**Why:** "not applicable to this case" is a different thing and is already
+handled elsewhere - court fields in a subrogation case are empty because the
+case type says so, not because anyone rejected them. Conflating the two would
+let a required field be dismissed with a click.
+
+**Confirm with the firm before relying on this** - it was decided for
+consistency, not stated by the lawyer.
+
+---
+
+## 28. Editing a field that was never extracted creates the row
+
+**Chosen:** `PATCH` on a field with no `case_field_values` row upserts one with
+`extracted_value = NULL`.
+
+**Why:** `claim_amount` in a subrogation case is explicitly manual entry - no
+document states it in a form worth trusting. A NULL `extracted_value` is
+honest: the model never claimed anything, so there is nothing to freeze.

@@ -60,7 +60,7 @@ backend/
       documents.py      # upload, list, signed URL, reclassify  done
     reference/          # product configuration, loaded by scripts/seed_reference
       document_types.py # 41 types; is_extractable decides what reaches the model
-      case_fields.py    # 42 fields + which document type supplies each
+      case_fields.py    # 45 fields + which document type supplies each
       deadlines.py      # the 45/60-day defence filing rule
     services/
       files.py          # format sniffing, Hebrew normalization, PDF inspection
@@ -180,7 +180,7 @@ Triggered as a `BackgroundTasks` job from the documents endpoint. The seam is de
 | Tenant isolation hardening + test suite | ✅ Done — 158 tests passing |
 | Role-based permissions (`owner`/`lawyer`/`staff`) | ✅ Done |
 | Audit logging | ✅ Done |
-| Reference data (41 document types, 42 fields, 66 mappings) | ✅ Done — derived from 6 real case files |
+| Reference data (41 document types, 45 fields, 66 mappings) | ✅ Done — derived from 6 real case files |
 | Extraction schema (`document_type_fields`, `field_candidates`) | ✅ Done |
 | Documents API + upload | ✅ Done — content sniffing, dedupe, soft delete |
 | Referral email parser | ✅ Done — 7 fields, no model, 6/6 samples |
