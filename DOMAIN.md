@@ -249,9 +249,51 @@ Found on the real run, not yet fixed:
    an empty column in a table. A zero amount is suspicious when payment
    documents exist in the case.
 
+## Claim (subrogation) cases are only half mapped
+
+**Verified by analysis, not yet by a real extraction run.** Only a defence case
+has been run end to end; the two claim cases in the samples have not.
+
+A claim case can currently reach **27 of 45 fields**. None of the missing ones
+is required, and most are missing correctly:
+
+- **Court fields, the case number and the whole deadline chain (9 fields).**
+  The case has not been filed yet, so there is no court, no case number and no
+  deadline. Empty is the right answer, not missing data.
+- **The claim amount.** The firm's decision: no document states it in a form
+  worth trusting, so it stays manual.
+
+**But eight party fields are missing for the wrong reason.** In a defence case
+the plaintiff's address and phone and the defendants' names all come from the
+pleading. A claim case has no pleading, and `subrogation_letter` is mapped only
+to the plaintiff's name and company number.
+
+The information exists - it is being extracted under third-party names:
+
+```
+third_party_owner_name      -> would be the defendant
+third_party_owner_address   -> address for service
+third_party_driver_name     -> possibly a second defendant
+```
+
+**What is blocked is a legal decision, not an engineering one.** In a
+subrogation case:
+
+- Is the plaintiff the insured, or the insurer? Both `insured_name` and
+  `plaintiff_1_name` exist; which one carries which?
+- Is the defendant the vehicle's owner, the driver, or the third party's
+  insurer?
+
+Getting this wrong would open every subrogation case in Odcanit with the wrong
+parties, so it must be answered by the firm before the mapping is written.
+
 ## Open questions
 
 - The exact Odcanit stored-procedure contract.
 - Whether court recess should be modelled in the deadline calculation.
 - Three document types the firm judged irrelevant for now: `תביעות-אאה`,
   `גוף-תשובה ממעתיק ת`, `דוח לוי יצחק`.
+- **Who the parties are in a subrogation case** (see the section above). Blocks
+  eight field mappings and an end-to-end run on a claim case.
+- Whether a plate number should be validated against the IDs in the same case;
+  one real extraction put an ID into the plate field.
