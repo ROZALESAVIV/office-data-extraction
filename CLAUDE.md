@@ -66,8 +66,8 @@ backend/
       files.py          # format sniffing, Hebrew normalization, PDF inspection
       referral_email.py # parses the insurer's email - 7 fields, no model
       storage.py        # Supabase Storage; keys are UUIDs only
-      llm.py            # <- planned: the only module touching the Claude API
-      extraction.py     # <- planned: Claude API -> field_candidates
+      llm.py            # the ONLY module touching the Claude API; swap models here
+      extraction.py     # classify -> navigate -> extract -> resolve
       odcanit.py        # <- planned: Odcanit client (not a REST API, see below)
   alembic/versions/     # migrations — authoritative source of truth for schema
   scripts/
@@ -177,7 +177,7 @@ Triggered as a `BackgroundTasks` job from the documents endpoint. The seam is de
 | Auth (login + JWT + `/me`) | ✅ Done |
 | Cases API (full CRUD, soft delete) | ✅ Done |
 | Senders API | ✅ Done |
-| Tenant isolation hardening + test suite | ✅ Done — 128 tests passing |
+| Tenant isolation hardening + test suite | ✅ Done — 158 tests passing |
 | Role-based permissions (`owner`/`lawyer`/`staff`) | ✅ Done |
 | Audit logging | ✅ Done |
 | Reference data (41 document types, 42 fields, 66 mappings) | ✅ Done — derived from 6 real case files |
@@ -185,7 +185,10 @@ Triggered as a `BackgroundTasks` job from the documents endpoint. The seam is de
 | Documents API + upload | ✅ Done — content sniffing, dedupe, soft delete |
 | Referral email parser | ✅ Done — 7 fields, no model, 6/6 samples |
 | Defence deadline rule | ✅ Done — `app/reference/deadlines.py` |
-| Extraction service (Claude API) | 🔲 Next |
+| Extraction service (Claude API) | ✅ Done — classify, navigate, extract, resolve |
+| Referral email wired into the pipeline | ✅ Done — 7 fields, no model call |
+| Startup recovery for stalled jobs | ✅ Done |
+| Review API | 🔲 **Next** |
 | Review API | 🔲 Planned |
 | Odcanit submission service | 🔲 Planned — connectivity model unresolved |
 | Frontend (React + Vite, RTL) | 🔲 Not started |

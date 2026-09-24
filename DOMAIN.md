@@ -74,6 +74,32 @@ Established with the firm's lawyer:
 **Lower priority number wins.** This is stated in three places because reading
 it backwards would silently invert every resolution.
 
+## How a pleading bundle is built
+
+Confirmed on three real defence files, and stated by the firm's lawyer:
+
+```
+[ אישור פתיחת תיק ]   court case-opening confirmation - sometimes first,
+                      sometimes last, sometimes absent entirely
+  3-5 pages           the pleading itself (כתב תביעה)
+  the rest            נספחים - exhibits
+```
+
+The exhibits are **copies of documents already in the case file separately** -
+the accident report, the appraiser's report, the payment schedule, photographs.
+Reading them again finds nothing new, costs money, and invites the model to
+pull a value out of the wrong document (an appraiser's report is full of
+amounts that are not the amount claimed).
+
+Real proportions: one 48-page file was 5 pages of content and 43 of exhibits.
+Another was 30 pages with 2 of content. **90% of a pleading bundle is noise.**
+
+This is why `extraction.locate_content()` exists: for anything over 8 pages, one
+cheap call finds where the content ends before extraction begins.
+
+The case-opening confirmation is **part of the content**, not an exhibit - it
+carries the court case number and the filing date, and nothing else does.
+
 ## The filing deadline
 
 Asked for by the firm; the rule is in `app/reference/deadlines.py`.
@@ -88,12 +114,47 @@ determines the days. **The procedure type as actually filed wins over the
 amount** — the court has already assigned the track.
 
 The clock starts at **service on the defendant**, which appears as a rubber
-`נתקבל` stamp on the pleading. It is often missing or illegible.
+`נתקבל` stamp on the pleading.
+
+**That stamp is frequently absent.** It was not on the sample pleading at all -
+there is a blank rectangle where it would go. The firm's rule when it is
+missing: count from the court's **filing date** instead, taken from the
+case-opening confirmation. That lands earlier than the true deadline, which is
+the direction of caution, and the field is given lower confidence to say so.
+
+**The day count can also be read rather than derived.** The summons (הזמנה
+לדין) on page 2 of the pleading states it outright - "45 days to file a
+defence". Reading the number is safer than inferring it from the procedure
+type, so `defence_days` is extracted and takes precedence.
+
+**Spelling trap, found as a live bug.** The procedure type appears as `תא"מ`,
+`תאד"מ`, `ת.א.` and `ת"א`. Matching on substrings is unsafe: `תא` is contained
+in `תא"מ`, so a fast-track claim was being given 60 days instead of 45 -
+fifteen days the lawyer does not have, which is the dangerous direction. The
+code now strips punctuation and compares whole tokens.
 
 **Not modelled:** court recess (פגרת בתי המשפט) and any extension granted. The
 computed date is therefore shown marked *computed — verify*, and the lawyer
 confirms it like any other field. When anything is unknown the function returns
 nothing rather than guessing: a wrong deadline is a missed filing.
+
+## Court identifiers are two fields, not one
+
+The pleading heading reads `תאד"מ 13051-05-26`. That is **two separate facts**
+going to **two different Odcanit fields**:
+
+| Part | Field | Odcanit field |
+|---|---|---|
+| `תאד"מ` | `court_procedure_type` | `הליך` |
+| `13051-05-26` | `court_case_number` | `תיק בימ"ש` |
+
+Only two procedure types matter to this firm: `תאד"מ` and `ת.א.`.
+
+## The claim amount
+
+The pleading states it twice: as a total near the top (`סכום התביעה`) and
+itemised near the end (damage / fees / interest). **The total is what matters** -
+12,279 rather than the 10,962 principal. The itemisation is not needed.
 
 ## What is NOT extractable
 
@@ -155,6 +216,38 @@ That is what the existing `senders` table with `odcanit_prefix` represents.
 
 Still unknown, and still blocking the submission stage: the actual stored
 procedure signatures and what Odcanit requires as a minimum to open a case.
+
+## Measured, not estimated
+
+Full extraction of one real 17-document case, end to end:
+
+| | |
+|---|---|
+| Cost | **$0.30** |
+| Time | ~200 seconds |
+| Fields filled | 33 of 45 |
+| Candidates | 61 |
+| Conflicts surfaced | 7 |
+
+Every field left empty was either a second plaintiff that does not exist or a
+second-degree amount. No required field was missed.
+
+Opus 5 is $5 per million input tokens and $25 per million output. The cost
+driver is **pages sent**, not model tier - type filtering and content
+navigation together cut it by roughly 80%.
+
+## Two known extraction errors
+
+Found on the real run, not yet fixed:
+
+1. **A plate number picked up an ID number.** `third_party_plate_number` came
+   back as `56414501`, which is the insured's ID `056414501` without its
+   leading zero. An Israeli plate is 7-8 digits and an ID is 9; they look
+   alike. The conflict detector flagged it, but a validation rule would be
+   better - a plate must not equal an ID in the same case.
+2. **`total_paid_by_insurer` came back as 0.00** at confidence 0.5, probably
+   an empty column in a table. A zero amount is suspicious when payment
+   documents exist in the case.
 
 ## Open questions
 

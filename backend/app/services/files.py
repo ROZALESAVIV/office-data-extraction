@@ -155,6 +155,20 @@ def pdf_page_window(blob: bytes, first_page: int, last_page: int) -> bytes:
     return buf.getvalue()
 
 
+def pdf_subset(blob: bytes, pages: list[int]) -> bytes:
+    """A new PDF containing exactly the given 1-indexed pages, in order."""
+    from pypdf import PdfReader, PdfWriter
+
+    reader = PdfReader(io.BytesIO(blob))
+    writer = PdfWriter()
+    for number in pages:
+        if 1 <= number <= len(reader.pages):
+            writer.add_page(reader.pages[number - 1])
+    buf = io.BytesIO()
+    writer.write(buf)
+    return buf.getvalue()
+
+
 # ── Hebrew text ──────────────────────────────────────────────────────────────
 
 _BIDI = dict.fromkeys(

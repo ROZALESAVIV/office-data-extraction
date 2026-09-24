@@ -226,3 +226,106 @@ is correct, is legal judgment.
 
 **Note:** the router originally had this wrong (blocking staff from uploading);
 the documented model was correct and the code was fixed to match.
+
+---
+
+## 17. Classification reads three pages, not one
+
+**Chosen:** `CLASSIFY_PAGES = 3`.
+
+**Why:** found as a live bug on a real file. A 48-page pleading was labelled
+`correspondence` at 0.55 confidence and skipped entirely, losing twelve fields -
+because page 1 is the court's case-opening confirmation, not the pleading. The
+document's real heading is on page 2. Reading three pages fixed it outright:
+`statement_of_claim` at 0.97.
+
+**Cost:** two extra pages on the cheapest call in the pipeline.
+
+---
+
+## 18. Long documents get a navigation pass before extraction
+
+**Chosen:** over 8 pages, one cheap low-effort call (`locate_content`) finds the
+page range holding the document's own content; extraction runs only on that.
+
+**Why:** a pleading bundle is 3-5 pages of claim followed by 40+ pages of
+exhibits that already exist in the case file separately. On the real 48-page
+file this cut extraction from 48 pages to 5 - and, more importantly, stopped the
+model reading an appraiser's report full of amounts while being asked for the
+amount claimed.
+
+**When unsure it widens, not narrows:** below the confidence threshold it falls
+back to a capped prefix. Cutting off real content loses fields; reading two
+extra pages costs a fraction of a cent.
+
+**Guarded by:** `test_long_documents_are_navigated_then_narrowed`,
+`test_unsure_navigation_falls_back_to_a_capped_prefix`.
+
+---
+
+## 19. A hard page cap, independent of navigation
+
+**Chosen:** `MAX_EXTRACT_PAGES = 40`, applied even when navigation is confident.
+
+**Why:** one real sample is a 186-page PDF of damage photographs. A single
+misclassification of a file that size is $1.67 spent on pictures of a bumper.
+The cap makes the worst case bounded rather than trusting two judgement calls
+in a row.
+
+---
+
+## 20. Some fields always need a lawyer, whatever the confidence
+
+**Chosen:** `case_fields.always_needs_review`, set on `court_procedure_type`,
+`claim_amount`, `service_date`, `court_filing_date`, `defence_days` and
+`defence_deadline`.
+
+**Why:** these feed the filing-deadline calculation. A wrong deadline is a
+missed filing, not a correctable mistake, and no confidence score is high enough
+to skip a human on that. A column rather than a hard-coded list because the firm
+expects to relax it once extraction has been measured in practice.
+
+---
+
+## 21. Near-duplicate document types are a bug, not a nicety
+
+**Chosen:** merged `insurance_history` and `past_claims_status` into
+`claims_status`; gave `repair_invoice` the field mapping its `is_extractable`
+flag already implied.
+
+**Why:** the classifier was splitting between two names for the same document
+and half those extractions were lost. A type that is extractable but has no
+fields mapped is a contradiction that costs a classification call and then
+silently skips.
+
+**Guarded by:** `test_no_extractable_type_is_left_with_nothing_to_extract`,
+`test_document_type_keys_are_unique_in_meaning`.
+
+---
+
+## 22. The procedure type is matched as a token, never a substring
+
+**Chosen:** strip punctuation, compare whole tokens against a set.
+
+**Why:** `"תא" in 'תא"מ'` is true, so a fast-track claim matched the regular
+track and got 60 days instead of 45. The failure was silent and in the
+dangerous direction - a lawyer believing they had fifteen more days than they
+did.
+
+**Guarded by:** `test_fast_track_is_not_mistaken_for_regular`, plus every real
+spelling seen on a document.
+
+---
+
+## 23. The deadline prefers what is written over what is derived
+
+**Chosen, in order:** service date + days stated in the summons; then service
+date + days derived from procedure type or amount; then, with no service date,
+the court's filing date + days; otherwise nothing.
+
+**Why:** the `נתקבל` stamp is often simply not there. Counting from the filing
+date lands earlier than the true deadline - the safe direction - and the result
+carries lower confidence to mark it as an assumption.
+
+**Never:** a computed deadline presented as a fact. It ignores court recess and
+granted extensions, so it is always shown as *computed - verify*.

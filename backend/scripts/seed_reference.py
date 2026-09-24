@@ -41,17 +41,19 @@ def main() -> int:
             print(f"document_types:      {created} created, {updated} updated")
 
             created = updated = 0
-            for field_key, label, data_type, required, sort_order in CASE_FIELDS:
+            for field_key, label, data_type, required, sort_order, always_review in CASE_FIELDS:
                 row = db.query(CaseField).filter(CaseField.field_key == field_key).first()
                 if row is None:
                     db.add(CaseField(
                         field_key=field_key, label=label, data_type=data_type,
                         is_required=required, sort_order=sort_order,
+                        always_needs_review=always_review,
                     ))
                     created += 1
                 else:
                     row.label, row.data_type = label, data_type
                     row.is_required, row.sort_order = required, sort_order
+                    row.always_needs_review = always_review
                     updated += 1
             db.flush()
             print(f"case_fields:         {created} created, {updated} updated")

@@ -256,6 +256,12 @@ class CaseField(Base):
     label: Mapped[str] = mapped_column(Text, nullable=False)
     data_type: Mapped[str] = mapped_column(Text, nullable=False)
     is_required: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    # Confirmed by a lawyer whatever the confidence. Used for the fields that
+    # feed the filing-deadline calculation, where a wrong value is a missed
+    # deadline rather than a correctable mistake.
+    always_needs_review: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, server_default="false"
+    )
     sort_order: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 
 

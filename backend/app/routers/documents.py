@@ -21,7 +21,7 @@ from app.schemas.documents import (
     DocumentTypeUpdate,
     DocumentUrlOut,
 )
-from app.services import files, storage
+from app.services import extraction, files, storage
 
 router = APIRouter(tags=["documents"])
 
@@ -210,6 +210,9 @@ def upload_documents(
                 pass
             raise
         ctx.db.refresh(doc)
+        # Only after the row is safely committed - otherwise the job could
+        # start before the document it is meant to read exists.
+        background_tasks.add_task(extraction.run, doc.id, ctx.user.tenant_id)
         results.append(_decorate(ctx.db, doc))
 
     return results
@@ -289,8 +292,28 @@ def set_document_type(
         case_id=doc.case_id,
         details={"from": str(before), "to": doc_type.type_key},
     )
+    doc.processing_status = "pending"
+    doc.extraction_attempts = 0
     ctx.db.commit()
     ctx.db.refresh(doc)
+    return _decorate(ctx.db, doc)
+
+
+@router.post("/documents/{document_id}/reprocess", response_model=DocumentOut)
+def reprocess_document(
+    document_id: uuid.UUID,
+    background_tasks: BackgroundTasks,
+    ctx: TenantContext = Depends(require_write_role),
+):
+    """Run extraction again, e.g. after the lawyer corrected the type."""
+    doc = _get_document(ctx, document_id)
+    doc.processing_status = "pending"
+    doc.extraction_attempts = 0
+    doc.processing_started_at = None
+    doc.error_message = None
+    ctx.db.commit()
+    ctx.db.refresh(doc)
+    background_tasks.add_task(extraction.run, doc.id, ctx.user.tenant_id)
     return _decorate(ctx.db, doc)
 
 

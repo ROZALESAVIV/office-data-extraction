@@ -187,3 +187,30 @@ def test_referral_email_outranks_every_other_source(admin_engine, seeded_referen
             assert email_prio < other_prio, (
                 f"{field_key}: email priority {email_prio} does not beat {other_prio}"
             )
+
+
+def test_no_extractable_type_is_left_with_nothing_to_extract(admin_engine, seeded_reference):
+    """A type marked extractable but with no fields costs a classification
+    call and then skips - a contradiction that wastes money silently."""
+    with admin_engine.connect() as conn:
+        empty = [
+            r[0]
+            for r in conn.execute(text("""
+                SELECT dt.type_key FROM document_types dt
+                WHERE dt.is_extractable
+                  AND NOT EXISTS (SELECT 1 FROM document_type_fields dtf
+                                  WHERE dtf.document_type_id = dt.id)
+                ORDER BY 1"""))
+        ]
+    assert empty == [], f"extractable types with no fields mapped: {empty}"
+
+
+def test_document_type_keys_are_unique_in_meaning(admin_engine, seeded_reference):
+    """Near-duplicate types make the classifier pick between equivalents.
+
+    'insurance_history' and 'claims_status' were two names for one document;
+    the model split between them and half the extractions were lost.
+    """
+    with admin_engine.connect() as conn:
+        labels = [r[0] for r in conn.execute(text("SELECT label FROM document_types"))]
+    assert len(labels) == len(set(labels)), "two document types share a label"
