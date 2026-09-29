@@ -176,7 +176,7 @@ itemised near the end (damage / fees / interest). **The total is what matters** 
 
 ## Most documents are photographs
 
-Of 41 catalogued types, 23 carry no field data: damage photos, driving licences,
+Of 39 catalogued types, 22 carry no field data: damage photos, driving licences,
 cheques, police confirmations, appraiser photos. They are stored and forwarded
 to Odcanit but never sent to the model.
 
@@ -288,6 +288,9 @@ Getting this wrong would open every subrogation case in Odcanit with the wrong
 parties, so it must be answered by the firm before the mapping is written.
 
 ## Open questions
+
+Tracked in **QUESTIONS.md**, with the assumption each one is currently running
+on. Summary:
 
 - The exact Odcanit stored-procedure contract.
 - Whether court recess should be modelled in the deadline calculation.

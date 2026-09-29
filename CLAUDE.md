@@ -9,6 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | **CLAUDE.md** (this file) | The code: structure, commands, technical constraints |
 | **DOMAIN.md** | The business: insurance subrogation, the two case types, which document to believe, the deadline rule. None of it is derivable from the code. |
 | **DECISIONS.md** | Every architectural decision with its reasoning and the alternative that was rejected. Read before changing anything that looks odd. |
+| **QUESTIONS.md** | What only the firm can answer. Every assumption the code is currently running on, named so it is not mistaken for a fact. Add to it rather than guessing twice. |
 
 ## What this is
 
@@ -24,7 +25,7 @@ This is **not** a case management system. Case lifecycle, billing, deadlines, an
 
 | Layer | Technology |
 |---|---|
-| Frontend | React + TypeScript (Vite) — not yet started |
+| Frontend | React + TypeScript (Vite), Hebrew/RTL — intake + review screens built |
 | Backend | FastAPI (Python) |
 | ORM | SQLAlchemy 2.0 + Alembic |
 | Database | PostgreSQL (Supabase) — multi-tenant via Row-Level Security (RLS) |
@@ -52,31 +53,41 @@ backend/
     models/
       models.py         # SQLAlchemy ORM — all 9 tables
     schemas/            # Pydantic models, split by topic; re-exported from __init__
-      auth.py  cases.py  senders.py
+      auth.py  cases.py  senders.py  documents.py  review.py
     routers/
       auth.py           # POST /auth/login, GET /auth/me       done
       cases.py          # full CRUD for cases                  done
       senders.py        # list/create senders                  done
       documents.py      # upload, list, signed URL, reclassify  done
+      review.py         # the review screen: read, decide, readiness  done
     reference/          # product configuration, loaded by scripts/seed_reference
-      document_types.py # 41 types; is_extractable decides what reaches the model
+      document_types.py # 39 types, 17 extractable; is_extractable decides what reaches the model
       case_fields.py    # 45 fields + which document type supplies each
+      case_types.py     # the two case types; matched exactly, never as a substring
       deadlines.py      # the 45/60-day defence filing rule
+      review.py         # attention thresholds + the per-case-type required set
     services/
       files.py          # format sniffing, Hebrew normalization, PDF inspection
       referral_email.py # parses the insurer's email - 7 fields, no model
       storage.py        # Supabase Storage; keys are UUIDs only
       llm.py            # the ONLY module touching the Claude API; swap models here
       extraction.py     # classify -> navigate -> extract -> resolve
+      review.py         # screen assembly + the readiness rule (reused by submit)
       odcanit.py        # <- planned: Odcanit client (not a REST API, see below)
   alembic/versions/     # migrations — authoritative source of truth for schema
+frontend/               # React + TypeScript (Vite). Hebrew, RTL. See frontend/README.md
+  src/
+    api/                # types.ts mirrors the Pydantic schemas; client.ts is the only caller
+    lib/hebrew.ts       # every string the lawyer reads, in one file
+    routes/             # UploadPage (intake), ReviewPage (the product)
+    components/         # FieldRow, ConflictDialog, ReadinessPanel, DocumentViewer
   scripts/
     seed.py             # dev tenant + user (idempotent, admin connection)
   tests/
     conftest.py         # forces a local throwaway DB; two DB roles
     test_rls.py         # tenant isolation proof — the gate for everything
     test_auth.py  test_cases.py  test_senders.py
-    test_files.py  test_documents.py  test_deadlines.py
+    test_files.py  test_documents.py  test_deadlines.py  test_review.py
     test_schema_invariants.py
   pyproject.toml        # pytest + ruff config
   requirements.txt
@@ -104,7 +115,22 @@ podman run -d --name ode-test-pg -e POSTGRES_PASSWORD=testpw \
   -e POSTGRES_DB=ode_test -p 55432:5432 docker.io/library/postgres:16-alpine
 pytest                  # conftest forces the local DB; it never uses your .env
 
-# Frontend — not started yet
+# Frontend (from frontend/) — needs the API on port 8000
+npm install
+npm run dev        # http://localhost:5173, proxies /api to the backend
+npm run build      # type-check + production bundle
+```
+
+**Never point the dev backend at the firm's real Supabase project while
+developing.** Use a local throwaway database:
+
+```bash
+psql -h localhost -p 55432 -U postgres -c "CREATE DATABASE ode_dev"
+export DATABASE_ADMIN_URL="postgresql://postgres:testpw@localhost:55432/ode_dev"
+export DATABASE_URL="postgresql://ode_app:ode_app_test_pw@localhost:55432/ode_dev"
+export APP_DB_ROLE=ode_app APP_DB_PASSWORD=ode_app_test_pw JWT_SECRET=dev-only
+alembic upgrade head && python -m scripts.seed && python -m scripts.seed_reference
+python -m uvicorn app.main:app --port 8000
 ```
 
 ## Data flow
@@ -146,6 +172,22 @@ The **migration files are the authoritative source of truth** for the schema. Th
 - `extracted_value` may be updated **only** while `status='pending_review' AND reviewed_at IS NULL`, so a better source document arriving later can still correct it. Once a lawyer confirms, edits or rejects, it is frozen permanently — enforced by the `trg_freeze_extracted_value` database trigger, not by router discipline.
 - Never write to `extracted_value` when a lawyer edits a field.
 
+**The review stage**
+
+- `case_field_values.updated_at` is an optimistic-locking token. Every
+  single-field mutation sends `expected_updated_at` and gets 409 on a mismatch.
+  Omitting it asserts *no row exists yet* — it is not a way to opt out.
+- The token is maintained by the `trg_touch_case_field_value` trigger
+  (`clock_timestamp()`, not `now()`), not by router discipline.
+- A **read never changes the case status.** `ready_for_review -> in_review` is
+  set by the first *mutation*. `in_review` is terminal for
+  `recompute_case_status`, so a glance must not freeze a case.
+- Required-ness is per case type: `case_fields.is_required` is the shared list,
+  and `app/reference/review.DEFENCE_ONLY_REQUIRED` adds the court fields when
+  `case_type` is `הגנה`. In a claim case those fields are correctly empty.
+- `readiness` is a convenience. The submission endpoint must recompute
+  `services/review.readiness()` server-side and refuse with the same payload.
+
 **Other constraints**
 - Status columns: `TEXT + CHECK constraint`, not Postgres ENUM types — easier to evolve.
 - `documents.file_format` (`pdf`/`docx`) and `documents.text_extractable` (bool) are independent columns — do not merge.
@@ -180,7 +222,7 @@ Triggered as a `BackgroundTasks` job from the documents endpoint. The seam is de
 | Tenant isolation hardening + test suite | ✅ Done — 158 tests passing |
 | Role-based permissions (`owner`/`lawyer`/`staff`) | ✅ Done |
 | Audit logging | ✅ Done |
-| Reference data (41 document types, 45 fields, 66 mappings) | ✅ Done — derived from 6 real case files |
+| Reference data (39 document types, 45 fields, 83 mappings) | ✅ Done — derived from 6 real case files |
 | Extraction schema (`document_type_fields`, `field_candidates`) | ✅ Done |
 | Documents API + upload | ✅ Done — content sniffing, dedupe, soft delete |
 | Referral email parser | ✅ Done — 7 fields, no model, 6/6 samples |
@@ -188,9 +230,11 @@ Triggered as a `BackgroundTasks` job from the documents endpoint. The seam is de
 | Extraction service (Claude API) | ✅ Done — classify, navigate, extract, resolve |
 | Referral email wired into the pipeline | ✅ Done — 7 fields, no model call |
 | Startup recovery for stalled jobs | ✅ Done |
-| Review API | 🔲 **Next** |
-| Odcanit submission service | 🔲 Planned — connectivity model unresolved |
-| Frontend (React + Vite, RTL) | 🔲 Not started |
+| Review API | ✅ Done — fields, candidates, confirm/edit/reject, bulk, readiness |
+| Odcanit submission service | 🔲 **Next** — connectivity model unresolved |
+| `case_type` closed to two values | ✅ Done — API, read path and a blocker for legacy data |
+| Frontend — intake + review screens | ✅ Done — React + Vite, Hebrew, RTL |
+| Frontend — submission screen | 🔲 Blocked on the Odcanit contract |
 
 ## API endpoints built
 
@@ -212,4 +256,12 @@ Triggered as a `BackgroundTasks` job from the documents endpoint. The seam is de
 | PATCH | `/documents/{id}` | Override the classification. Write role. |
 | DELETE | `/documents/{id}` | Soft delete. Write role. |
 | GET | `/document-types` | The catalogue, for re-classification |
+| GET | `/cases/{id}/fields` | The whole review screen, one call. Any tenant member. |
+| GET | `/cases/{id}/fields/{fid}/candidates` | What each document said, resolver order |
+| POST | `/cases/{id}/fields/{fid}/confirm` | Accept the value. Write role. Empty → 422. |
+| PATCH | `/cases/{id}/fields/{fid}` | Lawyer's own value; upserts. Write role. |
+| POST | `/cases/{id}/fields/{fid}/reject` | Wrong, no replacement. Write role. |
+| POST | `/cases/{id}/fields/{fid}/select-candidate` | Resolve a conflict by picking a document |
+| POST | `/cases/{id}/fields/bulk-confirm` | High-confidence sweep; returns every skip reason |
+| GET | `/cases/{id}/readiness` | Blockers and warnings for submission |
 | GET | `/health` | Liveness |

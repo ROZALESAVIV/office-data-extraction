@@ -11,6 +11,18 @@ from app.schemas.documents import (
     DocumentTypeUpdate,
     DocumentUrlOut,
 )
+from app.schemas.review import (
+    BulkConfirmIn,
+    BulkConfirmOut,
+    CandidateOut,
+    CandidateSelect,
+    FieldConfirm,
+    FieldEdit,
+    FieldReject,
+    ReadinessOut,
+    ReviewFieldOut,
+    ReviewFieldsOut,
+)
 from app.schemas.senders import SenderCreate, SenderOut
 
 __all__ = [
@@ -26,4 +38,14 @@ __all__ = [
     "DocumentUrlOut",
     "DocumentTypeOut",
     "DocumentTypeUpdate",
+    "ReviewFieldOut",
+    "ReviewFieldsOut",
+    "CandidateOut",
+    "FieldConfirm",
+    "FieldEdit",
+    "FieldReject",
+    "CandidateSelect",
+    "BulkConfirmIn",
+    "BulkConfirmOut",
+    "ReadinessOut",
 ]

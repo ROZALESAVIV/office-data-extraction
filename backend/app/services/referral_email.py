@@ -18,13 +18,13 @@ import re
 from dataclasses import dataclass, field
 from email import policy
 
+from app.reference.case_types import CASE_TYPE_CLAIM, CASE_TYPE_DEFENCE
 from app.services.files import normalize_date, normalize_he
 
-# What the firm is being asked to do. Stated verbatim in the email, and it
-# decides which fields are even applicable: a defence case has a pleading to
-# read, a claim case has not been filed yet.
-CASE_TYPE_DEFENCE = "הגנה"
-CASE_TYPE_CLAIM = "תביעה"
+# Re-exported for the callers that already import them from here. The canonical
+# definition lives in app/reference/case_types.py, so every rule that depends on
+# the case type agrees on what the two values are.
+__all__ = ["CASE_TYPE_CLAIM", "CASE_TYPE_DEFENCE", "ReferralEmail", "parse"]
 
 _PATTERNS = {
     "direct_claim_number": r"מספר\s+תביעה\s*:\s*(\S+)",

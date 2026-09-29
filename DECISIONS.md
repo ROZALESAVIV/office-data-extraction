@@ -546,3 +546,120 @@ to have no row yet". If one has appeared since, the request gets 409.
 lock has to be able to express "nothing was here" as well as "this version was
 here". Without it, two lawyers typing a manual value into the same empty field
 would silently overwrite one another.
+
+---
+
+## 29. What blocks submission, and what merely warns
+
+**Chosen:** a field blocks only if it is required *for this case type* and the
+lawyer has not decided on it. Three blocking reasons: `missing` (no value),
+`unconfirmed` (a value nobody looked at), `rejected`. Everything else is a
+warning that never blocks: an unacknowledged conflict on an optional field, a
+defence case whose deadline could not be computed, a case with no referral
+email, and an unknown case type.
+
+**Why "unconfirmed" blocks:** a machine-extracted value that no human has looked
+at is not a decision, and submitting it to Odcanit would make it one silently.
+
+**Why the court fields are required only in a defence case:** they carry
+`is_required = false` in the shared field list precisely because a subrogation
+case has none of them. `DEFENCE_ONLY_REQUIRED` adds `court_name`, `court_city`,
+`court_procedure_type`, `court_case_number`, `claim_amount` and
+`plaintiff_1_name` when the case type says a pleading exists. With the case type
+unknown the *smaller* set applies and a warning is raised - guessing "defence"
+would report correctly-empty fields as missing data.
+
+**Why the deadline only warns:** the rule genuinely returns nothing when neither
+a service stamp nor a filing date was found. Blocking there would punish the
+lawyer for the document's omission; staying silent would hide a defence filing
+with no deadline in sight.
+
+**Not confirmed by the firm.** The blocking set was derived from DOMAIN.md, not
+stated by the lawyer. Open as QUESTIONS.md #3; confirm before the Odcanit stage
+relies on it.
+
+---
+
+## 30. One confidence threshold, and NULL is not a failed check
+
+**Chosen:** `LOW_CONFIDENCE = 0.75`, used both for the `low_confidence`
+attention flag and as bulk-confirm's default bar (callers may pass a stricter or
+looser one per request). `snippet_verified` raises `unverified_snippet` only
+when it is **False**, never when it is NULL.
+
+**Why one number:** two thresholds are two things to explain and to keep in
+step, and there is no measurement yet that justifies separating them.
+
+**Why NULL does not flag:** NULL means the page had no text layer to check the
+quote against, which is the normal state for a scanned file - and most documents
+here are scans. Flagging it would light up nearly every field, and a flag that
+is always on carries no information.
+
+---
+
+## 31. `updated_at` is maintained by a trigger, not by the routers
+
+**Chosen:** `trg_touch_case_field_value` sets
+`case_field_values.updated_at = clock_timestamp()` on every update.
+
+**Why:** the column is the optimistic-locking token from decision 25. It
+previously had only a `server_default`, so it was accurate exactly as long as
+every present and future router remembered to set it by hand - the same class of
+mistake decision 7 moved into a trigger. A lock that depends on developer
+discipline is not a lock.
+
+**`clock_timestamp()`, not `now()`:** `now()` is the transaction start time, so
+two updates to one row inside one transaction would leave the token unchanged
+and a stale token would be accepted.
+
+**Guarded by:** `test_the_trigger_moves_the_token_on_every_update`.
+
+---
+
+## 32. `case_type` is a closed choice, enforced on three paths
+
+**Chosen:** the two values live in `app/reference/case_types.py` and are matched
+**exactly**. The API refuses to write anything else (422). An unrecognised value
+already in the database becomes a submission blocker, not an "unknown" case
+type. The UI renders a dropdown rather than a text box.
+
+**Why:** every court-field rule compares this value exactly. A lawyer editing
+the field to `להגשת הגנה` instead of `הגנה` would not be read as a defence case:
+the court fields would silently stop being required, and the case would look
+ready to submit with no court case number. Found by review, not by a test
+failure — it is the same substring/near-miss trap as DECISIONS 22, in a
+different field.
+
+**Why "unknown" was not safe enough on its own:** an unrecognised value would
+otherwise read as "case type not known", and the unknown branch deliberately
+applies the *smaller* required set. That is the right caution when the field is
+genuinely empty and the wrong one when it is populated with a near miss.
+
+**Guarded by:** `test_a_near_miss_case_type_is_refused_not_absorbed`,
+`test_an_unrecognised_case_type_already_in_the_data_blocks`.
+
+---
+
+## 33. All Hebrew copy lives in one file
+
+**Chosen:** `frontend/src/lib/hebrew.ts` holds every string the lawyer reads.
+Field labels and document-type labels are excluded — they come from the
+database, already in Hebrew, and the firm owns them.
+
+**Why:** the firm can review the wording without reading a component, and the
+same sentence does not get written twice in two slightly different ways. For a
+product where the copy carries legal meaning ("סומן כשגוי" is not the same as
+"לא רלוונטי"), that review has to be possible.
+
+---
+
+## 34. Latin text inside Hebrew is isolated, and file names use `plaintext`
+
+**Chosen:** case numbers and identifiers get `.mono` (isolated LTR); file names
+get `unicode-bidi: plaintext`, which takes direction from the string's own first
+strong character.
+
+**Why:** a file name like `כתב תביעה 13051-05-26.pdf` mixes scripts. Forcing LTR
+moved the Hebrew to the wrong end and made the name unreadable; leaving it to
+inherit RTL did the same to the extension. Observed on screen, not reasoned
+about — the first version shipped the mangled version.
