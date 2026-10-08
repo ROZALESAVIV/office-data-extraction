@@ -283,6 +283,27 @@ def normalize_id_number(value: str) -> str | None:
     return s or None
 
 
+# Curated, not fuzzy - confirmed by the firm's lawyer that each pair names the
+# same city under two different spellings (2026-09-29). This is deliberately a
+# short, explicit lookup, not a general similarity match: a generic fuzzy match
+# on free text would also fold together genuinely different names (see the
+# court_city normalisation note in DECISIONS.md) and hide a real conflict
+# instead of a false one. Add a pair only once it has been confirmed, never
+# inferred from spelling alone.
+_CITY_ALIASES = {
+    "תל אביב יפו": "תל אביב",
+    "תל אביב-יפו": "תל אביב",
+    "נוף הגליל": "נצרת",
+}
+
+
+def canonical_city(value: str | None) -> str | None:
+    """Fold a known alternate city name onto the name the firm treats as canonical."""
+    if value is None:
+        return None
+    return _CITY_ALIASES.get(value, value)
+
+
 def normalize_value(value: str | None, data_type: str) -> str | None:
     if value is None:
         return None

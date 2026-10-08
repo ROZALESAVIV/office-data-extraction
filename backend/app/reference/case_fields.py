@@ -158,12 +158,24 @@ DOCUMENT_TYPE_FIELDS = {
         ("third_party_owner_address", 20, None),
         ("third_party_plate_number",  20, None),
     ],
-    # Claim (subrogation) cases have no pleading. These carry the party details
-    # instead. The amount claimed is deliberately NOT mapped - it is not stated
-    # in a form the model can read reliably, so it stays a manual entry.
+    # Claim (subrogation) cases have no pleading. This letter - the demand we
+    # send to the other side - carries the party details instead.
+    #
+    # Party mapping confirmed with the firm 2026-09-29 (see DOMAIN.md, "Claim
+    # (subrogation) cases"). plaintiff_1_name is deliberately NOT mapped here:
+    # it is the referring insurer, a structural fact already known from the
+    # case's sender, populated by extraction._populate_subrogation_plaintiff
+    # rather than re-derived by reading this letter.
+    #
+    # The amount claimed is deliberately NOT mapped either - see "What is NOT
+    # extractable" in DOMAIN.md; the firm's two-document method is not yet
+    # precise enough to build.
     "subrogation_letter": [
-        ("plaintiff_1_name",         20, "בתיק שיבוב התובע הוא המבוטח שלנו או חברת הביטוח"),
-        ("plaintiff_1_id",           20, None),
+        ("plaintiff_1_id",   20, "מספר חברת הביטוח כתובעת, אם מצוין במכתב"),
+        ("plaintiff_2_name", 20, "אם התביעה מוגשת גם בשם המבוטח שלנו, זה התובע השני. אם לא - להשאיר ריק"),
+        ("plaintiff_2_id",   20, None),
+        ("defendant_1_name", 20, "הגורם שאליו מכתב השיבוב מופנה - הנתבע העיקרי"),
+        ("defendant_2_name", 20, "נתבע נוסף, אם המכתב מופנה ליותר מגורם אחד"),
         ("third_party_owner_name",   30, None),
         ("third_party_insurer",      30, None),
     ],

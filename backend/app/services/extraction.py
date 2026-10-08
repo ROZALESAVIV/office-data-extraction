@@ -22,7 +22,9 @@ from app.models.models import (
     DocumentType,
     DocumentTypeField,
     FieldCandidate,
+    Sender,
 )
+from app.reference.case_types import CASE_TYPE_CLAIM, canonical
 from app.reference.deadlines import defence_deadline
 from app.services import files, llm, referral_email, storage
 
@@ -273,6 +275,38 @@ def _from_referral_email(blob: bytes, specs: list[FieldSpec]) -> list[RawExtract
 # ── persistence ──────────────────────────────────────────────────────────────
 
 
+def _best_per_field(records: list[dict]) -> list[dict]:
+    """Collapse to one record per field_key: field_candidates allows only one
+    row per (document, field) - `uq_field_candidates_doc_field`.
+
+    A long document is read in windows purely as a cost mechanic (PAGE_WINDOW),
+    not because it says something different in each one. The same claim number
+    stated near the top and repeated near the bottom is the same fact found
+    twice, not two candidates - found as a live bug: two windows of one real
+    48-page pleading both returned direct_claim_number, and inserting both
+    violated the unique constraint and failed the *entire* document, losing
+    every field it would otherwise have contributed.
+
+    Kept: a verified snippet over an unverified one, then higher confidence,
+    then the earlier page - the document's own heading is usually where a
+    fact is stated authoritatively, a later repeat is corroboration.
+    """
+    best: dict[str, dict] = {}
+    for r in records:
+        key = r["field_key"]
+        current = best.get(key)
+        if current is None:
+            best[key] = r
+            continue
+        rank = (bool(r["verified"]), r["confidence"], -(r["page"] or 1 << 30))
+        current_rank = (
+            bool(current["verified"]), current["confidence"], -(current["page"] or 1 << 30)
+        )
+        if rank > current_rank:
+            best[key] = r
+    return list(best.values())
+
+
 def _persist_candidates(
     db: Session,
     doc: Document,
@@ -284,7 +318,7 @@ def _persist_candidates(
     # Rewritten wholesale so a re-run is idempotent rather than cumulative.
     db.query(FieldCandidate).filter(FieldCandidate.document_id == doc.id).delete()
 
-    written = 0
+    prepared: list[dict] = []
     for item in extractions:
         if item.value in (None, ""):
             continue
@@ -292,6 +326,11 @@ def _persist_candidates(
         normalized = files.normalize_value(item.value, spec.data_type)
         if spec.field_key.endswith("_id"):
             normalized = files.normalize_id_number(item.value)
+        elif spec.field_key == "court_city":
+            # "תל אביב-יפו" and "תל אביב" are the same city under two names,
+            # confirmed by the firm - fold them to one spelling so two documents
+            # naming the same court don't read as a disagreement.
+            normalized = files.canonical_city(normalized)
         if normalized is None:
             # The model produced something we cannot store as this type - a
             # date that is not a date, an amount with no digits.
@@ -304,6 +343,22 @@ def _persist_candidates(
             if not verified:
                 confidence = max(0.0, confidence - UNVERIFIED_SNIPPET_PENALTY)
 
+        prepared.append(
+            {
+                "field_key": spec.field_key,
+                "spec": spec,
+                "value": normalized,
+                "raw_value": item.value,
+                "confidence": confidence,
+                "page": item.page,
+                "snippet": item.snippet,
+                "verified": verified,
+            }
+        )
+
+    written = 0
+    for r in _best_per_field(prepared):
+        spec = r["spec"]
         db.add(
             FieldCandidate(
                 tenant_id=doc.tenant_id,
@@ -311,12 +366,12 @@ def _persist_candidates(
                 document_id=doc.id,
                 field_id=spec.field_id,
                 extraction_run_id=run_id,
-                value=normalized,
-                raw_value=item.value,
-                confidence=confidence,
-                source_page=item.page,
-                source_snippet=(item.snippet or "")[: llm.MAX_SNIPPET_CHARS] or None,
-                snippet_verified=verified,
+                value=r["value"],
+                raw_value=r["raw_value"],
+                confidence=r["confidence"],
+                source_page=r["page"],
+                source_snippet=(r["snippet"] or "")[: llm.MAX_SNIPPET_CHARS] or None,
+                snippet_verified=r["verified"],
                 priority=spec.priority,
             )
         )
@@ -420,6 +475,7 @@ def resolve_case_fields(db: Session, case_id: uuid.UUID, tenant_id: uuid.UUID) -
             row.conflict_count = 2 if disagrees else 0
 
     _compute_deadline(db, case_id, tenant_id, now)
+    _populate_subrogation_plaintiff(db, case_id, tenant_id, now)
     return resolved
 
 
@@ -486,6 +542,68 @@ def _compute_deadline(db: Session, case_id: uuid.UUID, tenant_id: uuid.UUID, now
         row.extracted_value = iso
         row.value = iso
         row.confidence_score = 0.5 if result.is_cautious else 0.9
+        row.resolved_at = now
+
+
+def _populate_subrogation_plaintiff(
+    db: Session, case_id: uuid.UUID, tenant_id: uuid.UUID, now
+) -> None:
+    """In a claim (subrogation) case, plaintiff_1 is the referring insurer.
+
+    Confirmed by the firm (2026-09-29): "Direct Insurance is registered as
+    [the plaintiff] because it is the main recurring client [in] every one of
+    its subrogation cases." That is a structural fact already known the moment
+    the case is created - who referred it - not something to re-derive by
+    reading a document. Computed here, the same way defence_deadline is:
+    never extracted, and frozen the moment a lawyer has looked at the field
+    (DECISIONS 7).
+
+    Deliberately does NOT touch plaintiff_2 (the insured, only when the claim
+    is also brought in their name) or any defendant field - those depend on
+    the specific letter's content and the firm's own judgement, not on a fact
+    this system already holds. They stay extracted from `subrogation_letter`
+    instead (see DOCUMENT_TYPE_FIELDS).
+    """
+    fields = {cf.field_key: cf for cf in db.query(CaseField).all()}
+    target = fields.get("plaintiff_1_name")
+    case_type_field = fields.get("case_type")
+    if target is None or case_type_field is None:
+        return
+
+    case_type_row = (
+        db.query(CaseFieldValue)
+        .filter(CaseFieldValue.case_id == case_id, CaseFieldValue.field_id == case_type_field.id)
+        .first()
+    )
+    if case_type_row is None or canonical(case_type_row.value) != CASE_TYPE_CLAIM:
+        return
+
+    case = db.get(Case, case_id)
+    if case is None or case.sender_id is None:
+        return
+    sender = db.get(Sender, case.sender_id)
+    if sender is None:
+        return
+
+    row = (
+        db.query(CaseFieldValue)
+        .filter(CaseFieldValue.case_id == case_id, CaseFieldValue.field_id == target.id)
+        .first()
+    )
+    if row is None:
+        db.add(
+            CaseFieldValue(
+                tenant_id=tenant_id, case_id=case_id, field_id=target.id,
+                extracted_value=sender.name, value=sender.name,
+                # A structural fact, not an inference - as certain as a value
+                # gets in this system.
+                confidence_score=1.0, status="pending_review", resolved_at=now,
+            )
+        )
+    elif row.status == "pending_review" and row.reviewed_at is None:
+        row.extracted_value = sender.name
+        row.value = sender.name
+        row.confidence_score = 1.0
         row.resolved_at = now
 
 

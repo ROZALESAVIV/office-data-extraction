@@ -375,3 +375,156 @@ def test_an_absurdly_long_range_is_capped(client, headers, case_id, firm, store)
     extraction.run(doc["id"], firm, client=fake)
     windows = [c for c in fake.calls if c["tool"] == llm.EXTRACT_TOOL_NAME]
     assert len(windows) * extraction.PAGE_WINDOW <= extraction.MAX_EXTRACT_PAGES
+
+
+def test_a_known_city_alias_is_canonicalised_on_persist(
+    client, headers, case_id, firm, store, admin_engine
+):
+    """'תל אביב-יפו' and 'תל אביב' are the same city, confirmed by the firm's
+    lawyer - folded to one spelling at persist time so a second document
+    naming the same court in the other spelling doesn't read as a conflict."""
+    doc = upload(client, headers, case_id, "claim.pdf", pdf_bytes())
+    fake = FakeLLM({
+        llm.CLASSIFY_TOOL_NAME: classified("statement_of_claim"),
+        llm.EXTRACT_TOOL_NAME: extracted(
+            ("court_city", "תל אביב-יפו", 0.9, 1, "בית משפט השלום בתל אביב-יפו"),
+        ),
+    })
+    extraction.run(doc["id"], firm, client=fake)
+
+    values = field_values(admin_engine, case_id)
+    assert values["court_city"].value == "תל אביב"
+
+
+# ── subrogation party mapping, confirmed with the firm 2026-09-29 ───────────
+
+
+def _set_case_type(admin_engine, firm, case_id, value):
+    with admin_engine.begin() as conn:
+        field_id = conn.execute(
+            text("SELECT id FROM case_fields WHERE field_key = 'case_type'")
+        ).scalar_one()
+        conn.execute(
+            text(
+                "INSERT INTO case_field_values "
+                "(tenant_id, case_id, field_id, value, extracted_value, status) "
+                "VALUES (:t, :c, :f, :v, :v, 'pending_review')"
+            ),
+            {"t": firm, "c": case_id, "f": field_id, "v": value},
+        )
+
+
+def _attach_sender(admin_engine, firm, case_id, name):
+    with admin_engine.begin() as conn:
+        sender_id = conn.execute(
+            text(
+                "INSERT INTO senders (tenant_id, name, odcanit_prefix) "
+                "VALUES (:t, :n, '555') RETURNING id"
+            ),
+            {"t": firm, "n": name},
+        ).scalar_one()
+        conn.execute(
+            text("UPDATE cases SET sender_id = :s WHERE id = :c"),
+            {"s": sender_id, "c": case_id},
+        )
+
+
+def test_subrogation_plaintiff_is_populated_from_the_sender(
+    case_id, firm, admin_engine, admin_session
+):
+    """plaintiff_1 in a claim case is the referring insurer - a structural
+    fact already known from the case's sender, not re-derived from a letter."""
+    _set_case_type(admin_engine, firm, case_id, "תביעה")
+    _attach_sender(admin_engine, firm, case_id, "ביטוח ישיר")
+
+    extraction.resolve_case_fields(admin_session, case_id, firm)
+    admin_session.commit()
+
+    values = field_values(admin_engine, case_id)
+    assert values["plaintiff_1_name"].value == "ביטוח ישיר"
+    assert float(values["plaintiff_1_name"].confidence_score) == 1.0
+
+
+def test_a_defence_case_s_plaintiff_is_not_touched_by_the_sender(
+    case_id, firm, admin_engine, admin_session
+):
+    """Only a claim case's plaintiff is the referring insurer - in a defence
+    case plaintiff_1 is whoever sued us, read from the pleading instead."""
+    _set_case_type(admin_engine, firm, case_id, "הגנה")
+    _attach_sender(admin_engine, firm, case_id, "ביטוח ישיר")
+
+    extraction.resolve_case_fields(admin_session, case_id, firm)
+    admin_session.commit()
+
+    values = field_values(admin_engine, case_id)
+    assert "plaintiff_1_name" not in values
+
+
+def test_a_confirmed_plaintiff_is_never_overwritten_by_the_sender(
+    case_id, firm, admin_engine, admin_session
+):
+    """Once a lawyer has decided, this mechanical fill-in must back off -
+    same freeze rule as every other resolved field (DECISIONS 7)."""
+    _set_case_type(admin_engine, firm, case_id, "תביעה")
+    _attach_sender(admin_engine, firm, case_id, "ביטוח ישיר")
+    with admin_engine.begin() as conn:
+        field_id = conn.execute(
+            text("SELECT id FROM case_fields WHERE field_key = 'plaintiff_1_name'")
+        ).scalar_one()
+        conn.execute(
+            text(
+                "INSERT INTO case_field_values "
+                "(tenant_id, case_id, field_id, value, extracted_value, status, reviewed_at) "
+                "VALUES (:t, :c, :f, 'שם שתוקן ידנית', NULL, 'edited', now())"
+            ),
+            {"t": firm, "c": case_id, "f": field_id},
+        )
+
+    extraction.resolve_case_fields(admin_session, case_id, firm)
+    admin_session.commit()
+
+    values = field_values(admin_engine, case_id)
+    assert values["plaintiff_1_name"].value == "שם שתוקן ידנית"
+
+
+def test_no_sender_means_no_crash_and_no_value(case_id, firm, admin_engine, admin_session):
+    _set_case_type(admin_engine, firm, case_id, "תביעה")
+    # No sender attached - cases.sender_id stays NULL.
+
+    extraction.resolve_case_fields(admin_session, case_id, firm)
+    admin_session.commit()
+
+    values = field_values(admin_engine, case_id)
+    assert "plaintiff_1_name" not in values
+
+
+def test_the_same_field_found_in_two_windows_does_not_crash_the_document(
+    client, headers, case_id, firm, store, admin_engine
+):
+    """Found as a live bug on real data: a 26-page pleading stated the claim
+    number near the top and repeated it lower down, in two different
+    extraction windows. Inserting both candidates violated the one-row-per-
+    (document, field) constraint and failed the entire document, losing every
+    field it would otherwise have contributed - not just the duplicate one."""
+    doc = upload(client, headers, case_id, "long.pdf", pdf_bytes(pages=35))
+    fake = FakeLLM({
+        llm.CLASSIFY_TOOL_NAME: classified("statement_of_claim"),
+        llm.NAVIGATE_TOOL_NAME: {
+            "content_first_page": 1, "content_last_page": 35,
+            "confidence": 0.95, "reason": "all content",
+        },
+        llm.EXTRACT_TOOL_NAME: [
+            # Window 1: pages 1-20. The court name, confidently, near the top.
+            extracted(("court_name", "בית משפט השלום", 0.9, 1, "בית משפט השלום")),
+            # Window 2: pages 21-35 (window-local page 1 = document page 21).
+            # Same fact, repeated, read with less confidence further down.
+            extracted(("court_name", "בית משפט השלום", 0.65, 1, "בבית משפט השלום")),
+        ],
+    })
+    report = extraction.run(doc["id"], firm, client=fake)
+
+    assert report.status == "extracted", "must not fail the whole document"
+    values = field_values(admin_engine, case_id)
+    assert values["court_name"].value == "בית משפט השלום"
+    # The higher-confidence, earlier occurrence won.
+    assert values["court_name"].source_page == 1

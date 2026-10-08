@@ -14,7 +14,7 @@ export interface FieldRowProps {
   busy: boolean;
   onConfirm: (field: ReviewField) => void;
   onEdit: (field: ReviewField, value: string) => void;
-  onReject: (field: ReviewField, reason: string) => void;
+  onReject: (field: ReviewField) => void;
   onOpenConflict: (field: ReviewField) => void;
   onOpenDocument: (documentId: string, page: number | null) => void;
 }
@@ -31,8 +31,6 @@ export default function FieldRow({
 }: FieldRowProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(field.value ?? "");
-  const [rejecting, setRejecting] = useState(false);
-  const [reason, setReason] = useState("");
 
   const decided = field.status !== "pending_review";
   const blocking =
@@ -171,37 +169,6 @@ export default function FieldRow({
               <div className="field-row__snippet">{field.source.snippet}</div>
             )}
 
-            {rejecting && (
-              <div className="field-row__edit" style={{ marginBlockStart: 8 }}>
-                <input
-                  className="input"
-                  placeholder={t.rejectReason}
-                  value={reason}
-                  autoFocus
-                  onChange={(e) => setReason(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") {
-                      onReject(field, reason);
-                      setRejecting(false);
-                      setReason("");
-                    }
-                  }}
-                />
-                <button
-                  className="btn btn--sm btn--danger-ghost"
-                  onClick={() => {
-                    onReject(field, reason);
-                    setRejecting(false);
-                    setReason("");
-                  }}
-                >
-                  {t.reject}
-                </button>
-                <button className="btn btn--ghost btn--sm" onClick={() => setRejecting(false)}>
-                  ביטול
-                </button>
-              </div>
-            )}
           </>
         )}
       </div>
@@ -222,9 +189,11 @@ export default function FieldRow({
             {t.edit}
           </button>
           {field.extracted_value !== null && field.status !== "rejected" && (
+            // Confirmed with the firm: no written reason, just clear the value.
+            // A native confirm, same as deleting a document elsewhere in the app.
             <button
               className="btn btn--danger-ghost btn--sm"
-              onClick={() => setRejecting(true)}
+              onClick={() => window.confirm(t.rejectConfirm) && onReject(field)}
               disabled={busy}
             >
               {t.reject}

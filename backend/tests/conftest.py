@@ -46,6 +46,12 @@ os.environ["APP_DB_PASSWORD"] = APP_ROLE_PASSWORD
 os.environ["JWT_SECRET"] = "test-secret-not-for-production"
 os.environ["SUPABASE_URL"] = ""
 os.environ["SUPABASE_SERVICE_KEY"] = ""
+# Every test that reaches extraction.run() passes an explicit FakeLLM, so the
+# real key is never used today - but a future test that forgets to pass one
+# would silently fall through to llm.AnthropicLLM() and make a real, billed
+# call using whatever is in backend/.env. Blanking it here makes that fail
+# loudly (a clear auth error) instead of quietly spending money.
+os.environ["ANTHROPIC_API_KEY"] = ""
 
 import bcrypt  # noqa: E402
 from sqlalchemy import create_engine, text  # noqa: E402

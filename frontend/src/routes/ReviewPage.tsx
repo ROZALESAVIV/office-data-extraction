@@ -82,10 +82,8 @@ export default function ReviewPage() {
   const onEdit = (field: ReviewField, value: string) =>
     void mutate(field, () => api.editField(caseId, field.field_id, value, field.updated_at));
 
-  const onReject = (field: ReviewField, reason: string) =>
-    void mutate(field, () =>
-      api.rejectField(caseId, field.field_id, field.updated_at, reason || undefined),
-    );
+  const onReject = (field: ReviewField) =>
+    void mutate(field, () => api.rejectField(caseId, field.field_id, field.updated_at));
 
   const onChooseCandidate = async (candidateId: string) => {
     const field = conflictField;

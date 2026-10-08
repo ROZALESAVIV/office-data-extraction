@@ -318,7 +318,7 @@ def reject_field(
     _begin_review(case)
     audit.record(
         ctx.db, ctx.user, "field.rejected", case_id=case_id,
-        details={"field_key": field.field_key, "was": before, "reason": body.reason},
+        details={"field_key": field.field_key, "was": before},
     )
     ctx.db.commit()
     return _one(ctx, case_id, field_id)

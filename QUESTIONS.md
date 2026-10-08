@@ -14,118 +14,133 @@ Status: 🔴 blocking work · 🟡 an assumption is live in the code · ⚪ can 
 
 ---
 
-## 🔴 1. Who are the parties in a subrogation case?
+## 🔴 1. What does Odcanit actually require, technically, to open a case?
 
-**Why it matters:** blocks eight field mappings and the whole submission of a
-claim case. Getting it wrong would open every subrogation case in Odcanit with
-the wrong parties.
+**Why it matters:** blocks the submission service entirely. Narrowed on
+2026-09-29 — the *business* minimum is answered (see Answered #2), this is
+purely the technical contract.
 
-**Ask:**
-- In a claim (`להגשת תביעה`) case, is the **plaintiff** our insured, or the
-  insurance company? Both `insured_name` and `plaintiff_1_name` exist — which
-  one carries which?
-- Is the **defendant** the third party's vehicle owner, the driver, or the
-  third party's insurer? If more than one, in what order?
-
-**Current state:** the information is already extracted, under third-party
-names (`third_party_owner_name`, `third_party_owner_address`,
-`third_party_driver_name`). Nothing maps it to the party fields, so it is not
-lost, just not placed.
+**Ask:** the exact **stored procedure** signatures for opening an entity and a
+case, and whether a cloud backend can reach the on-prem server at all given
+what the firm described as no special security on the connection (needs a real
+assessment, not an impression).
 
 ---
 
-## 🔴 2. What does Odcanit actually require to open a case?
+## 🟡 2. The exact claim-amount computation for a subrogation case
 
-**Why it matters:** blocks the submission service entirely.
+**Why it matters:** this field was believed unextractable and left manual; the
+firm's 2026-09-29 answer says otherwise, but not precisely enough to build.
 
-**Ask:**
-- The exact **stored procedure** signatures for opening an entity and a case.
-- Which fields are the **minimum** Odcanit will accept, and which it rejects.
-- Where does the SQL Server live, and can a cloud backend reach it at all? (If
-  not, the fallback is a file export.)
+**Ask:** is `claim_amount` the **sum** of the insurer's payment breakdown
+amount and the insured's loss-confirmation amount, or one or the other
+depending on circumstance? When there is no "אישור הפסדים" and the appraiser's
+report is used instead, what exactly gets read from it?
 
----
-
-## 🟡 3. Which fields must be filled before a case may be submitted?
-
-**Why it matters:** the list is currently **my inference from DOMAIN.md, not the
-firm's answer.** Too strict and lawyers get stuck on fields nobody needs; too
-loose and incomplete cases reach Odcanit.
-
-**Ask:**
-- In a **defence** case, must all of these be filled?
-  `court_name`, `court_city`, `court_procedure_type`, `court_case_number`,
-  `claim_amount`, `plaintiff_1_name`
-- **`plaintiff_1_name` especially** — I assumed a defence case cannot be opened
-  without naming who sued. Is that right?
-- Is there anything in the shared required list that is in practice *optional*?
-
-**Assumption live in the code:** `app/reference/review.DEFENCE_ONLY_REQUIRED`,
-recorded as DECISIONS 29.
+**Current state:** not implemented. See DOMAIN.md, "What is NOT extractable."
 
 ---
 
-## 🟡 4. What should "rejected" mean to a lawyer?
+## 🟡 3. May investigation reports be sent to the external AI model at all?
 
-**Why it matters:** decides whether a rejected required field still blocks
-submission.
+**Why it matters:** every extractable document currently goes to Claude. If
+this document type carries a confidentiality obligation that forbids that, it
+needs to be excluded, not just handled carefully.
 
-**Ask:** when a lawyer marks a field as wrong, do they mean
-- *"the value is wrong and I have no replacement"* — the field is still needed,
-  the case is not ready; or
-- *"this field does not apply to this case"* — the case can go ahead without it?
+**Ask:** what is the source of the confidentiality obligation on `דוחות חקירה`
+(statute, professional ethics rule, or firm policy), and does it mean the
+document type must never reach the model, or just that it needs careful
+handling once there?
 
-**Assumption live in the code:** the first. `rejected` blocks. Recorded as
-DECISIONS 27, decided for consistency and **not** stated by the lawyer.
-
----
-
-## 🟡 5. Must a lawyer confirm every required field by hand?
-
-**Why it matters:** it is 13–19 clicks per case. Correct in principle — a value
-no human looked at is not a decision — but the cost is real and falls on every
-case.
-
-**Ask:**
-- Is clicking through every required field acceptable, or should a
-  high-confidence value count as confirmed unless the lawyer says otherwise?
-- The bulk-confirm button never touches conflicts or the deadline fields. Is
-  that the right line?
-
-**Assumption live in the code:** every required field must be decided
-explicitly. Worth re-asking after the first real case is reviewed end to end.
+**Current state:** sent to the model like any other extractable type today.
+No exclusion built.
 
 ---
 
-## ⚪ 6. Should court recess (פגרת בתי המשפט) be modelled in the deadline?
+## 🟡 4. Should `staff` be able to confirm field values?
 
-**Why it matters:** the computed deadline is already shown as *computed —
-verify* precisely because recess and granted extensions are not modelled.
-Modelling recess would make it more accurate but still not authoritative.
+**Why it matters:** DECISIONS 16 restricts confirming values to
+`owner`/`lawyer`. The firm says a clerk does the confirming in practice.
 
-**Ask:** is it worth it, or does the lawyer check the calendar anyway?
+**Ask:** does the clerk who confirms values get the `lawyer` role in the
+system, or does `staff` need confirm permission too?
 
----
-
-## ⚪ 7. Should a plate number be validated against the ID numbers in the case?
-
-**Why it matters:** one real extraction put the insured's ID `056414501` into
-`third_party_plate_number` as `56414501`. An Israeli plate is 7–8 digits, an ID
-is 9; they look alike. The conflict detector caught it, but a rule would be
-better.
-
-**Ask:** confirm the rule — a plate number must never equal an ID appearing
-elsewhere in the same case. Any exceptions?
+**Current state:** only `owner`/`lawyer` can confirm, edit, or reject a field.
 
 ---
 
-## ⚪ 8. Three document types the firm set aside
+## ⚪ 5. Exact spelling of the third main client number
+
+**Why it matters:** low stakes, but a wrong sender name is a wrong Odcanit
+prefix later.
+
+**Ask:** confirm the spelling of "האודן" (main case 1555) — came through
+garbled in the original answer.
+
+---
+
+## ⚪ 6. Three document types the firm set aside
 
 `תביעות-אאה`, `גוף-תשובה ממעתיק ת`, `דוח לוי יצחק` were judged irrelevant for
-now. Confirm they stay out, or say what they are for.
+now. Not yet re-confirmed in the 2026-09-29 round — still worth a one-line
+check, and whether any document type is missing from the catalogue entirely.
 
 ---
 
 ## Answered
 
-*(nothing yet)*
+### 1. Who are the parties in a subrogation case? — 2026-09-29
+
+**Plaintiff:** Direct Insurance is `plaintiff_1` — the recurring main client.
+When the suit is also brought in the insured's name, the insured becomes
+`plaintiff_2`.
+
+**Defendant, in priority order:** if there is no doubt the other side's
+insurer covers the accident, the insurer alone is `defendant_1`. If unsure, the
+other driver is added. If the driver's details are missing, the vehicle's
+owner is added instead. When suing more than one, the order is driver, then
+owner, then the insurer last.
+
+**Implemented 2026-09-30** — `plaintiff_1_name` computed from the case's
+sender, `plaintiff_2_name`/`defendant_1_name`/`defendant_2_name` mapped to
+`subrogation_letter`. See DECISIONS 38, DOMAIN.md "Claim (subrogation) party
+mapping." Not yet verified against a real subrogation case's actual documents.
+
+### 2. What does Odcanit require, as a business minimum, to open a case? — 2026-09-29
+
+Almost nothing — only the main client. Odcanit auto-assigns the next sub-case
+number under it. "In principle you can always complete almost any field in
+Odcanit later." The "required before submission" list is a **firm workflow
+standard**, not an Odcanit technical limit. See DECISIONS 29, DOMAIN.md
+"Odcanit."
+
+### 3. Which fields must be filled before a case may be submitted? — 2026-09-29
+
+Confirmed: court name through claim amount, all required in a defence case.
+Plaintiff name and full details required too, "unless missing from the
+material, in which case we try to complete it" manually. `DEFENCE_ONLY_REQUIRED`
+in `app/reference/review.py` confirmed correct, including `plaintiff_1_name`.
+
+### 4. What should "rejected" mean to a lawyer? — 2026-09-29
+
+Confirmed: the real workflow is binary — type the correct value, or clear it
+and leave it blank until someone knows the answer. No written reason involved.
+Matches the existing `edit`/`reject` design; the reason field was removed
+(DECISIONS 37).
+
+### 5. Must a lawyer confirm every required field by hand? — 2026-09-29
+
+Confirmed, with one exclusion: every field needs explicit confirmation
+**except** the 7 fields from the referral email — those are trusted outright.
+A clerk does the confirming, not necessarily a lawyer (see open question #4
+above for the permission-model follow-up this raises).
+
+### 6. Should court recess be modelled in the deadline? — 2026-09-29
+
+Not now. Compute ignoring recess; an optional future "flagged with an
+asterisk, or which recess was detected" is nice-to-have, not required.
+
+### 7. Should a plate number be validated against IDs in the case? — 2026-09-29
+
+Confirmed safe: "wouldn't hurt at all, such a glitch could indeed happen."
+Built as an attention flag, not an auto-correction — see DECISIONS 35.

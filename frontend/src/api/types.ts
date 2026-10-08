@@ -21,6 +21,13 @@ export type CaseStatus =
   | "closed"
   | "failed";
 
+export interface Sender {
+  id: Uuid;
+  name: string;
+  is_active: boolean;
+  created_at: string;
+}
+
 export interface Case {
   id: Uuid;
   case_number: string;
@@ -73,7 +80,13 @@ export type AttentionReason =
   | "conflict"
   | "low_confidence"
   | "unverified_snippet"
-  | "missing_required";
+  | "missing_required"
+  // A plate number equalling an ID number in the same case - confirmed by the
+  // firm: a plate field once returned the insured's own ID with its leading
+  // zero missing.
+  | "plate_matches_id"
+  // total_paid_by_insurer = 0 - confirmed always worth a second look.
+  | "suspicious_zero";
 
 export interface FieldSource {
   document_id: Uuid | null;

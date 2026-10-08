@@ -9,6 +9,7 @@ bcrypt
 python-multipart
 anthropic
 supabase
+pypdf
 
 # tests
 pytest

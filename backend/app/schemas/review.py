@@ -13,6 +13,13 @@ AttentionReason = Literal[
     "low_confidence",
     "unverified_snippet",
     "missing_required",
+    # A plate equalling an ID number in the same case - confirmed by the firm,
+    # 2026-09-29. Real example: a plate field returned the insured's own ID
+    # missing its leading zero.
+    "plate_matches_id",
+    # Total paid = 0 - confirmed always worth a second look: "necessarily a
+    # mistake" in a claim case, "a sign of an error" in a defence case.
+    "suspicious_zero",
 ]
 
 
@@ -93,7 +100,9 @@ class FieldEdit(_Locked):
 
 
 class FieldReject(_Locked):
-    reason: str | None = None
+    """No reason field - confirmed with the firm (2026-09-29): the workflow is
+    either type the correct value, or clear it and leave it blank until someone
+    knows the answer. No separate written explanation is part of that."""
 
 
 class CandidateSelect(_Locked):

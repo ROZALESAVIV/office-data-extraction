@@ -273,7 +273,7 @@ def test_reject_clears_the_value_but_keeps_the_claim(client, headers, firm, admi
 
     resp = client.post(
         f"/cases/{firm['case']}/fields/{f['field_id']}/reject",
-        json={"expected_updated_at": f["updated_at"], "reason": "not the driver"},
+        json={"expected_updated_at": f["updated_at"]},
         headers=headers,
     )
     assert resp.status_code == 200, resp.text
@@ -678,3 +678,63 @@ def test_an_unrecognised_case_type_already_in_the_data_blocks(
     reasons = {b["field_key"]: b["reason"] for b in body["blockers"]}
     assert reasons["case_type"] == "unrecognised"
     assert body["is_ready"] is False
+
+
+# ── validation flags confirmed with the firm 2026-09-29 ─────────────────────
+
+
+def test_plate_equalling_an_id_in_the_same_case_is_flagged(client, headers, firm, admin_engine):
+    """The real bug: a plate came back as the insured's ID missing its leading
+    zero. Compared as numbers, not strings, so the missing zero doesn't hide it."""
+    with admin_engine.begin() as conn:
+        set_value(conn, firm, "insured_id", "056414501")
+        set_value(conn, firm, "third_party_plate_number", "56414501")
+
+    f = fields_by_key(client, headers, firm["case"])["third_party_plate_number"]
+    assert "plate_matches_id" in f["attention_reasons"]
+
+
+def test_a_plate_that_genuinely_differs_from_every_id_is_not_flagged(
+    client, headers, firm, admin_engine
+):
+    with admin_engine.begin() as conn:
+        set_value(conn, firm, "insured_id", "056414501")
+        set_value(conn, firm, "third_party_plate_number", "4471203")
+
+    f = fields_by_key(client, headers, firm["case"])["third_party_plate_number"]
+    assert "plate_matches_id" not in f["attention_reasons"]
+
+
+def test_a_zero_payment_is_always_flagged(client, headers, firm, admin_engine):
+    """Confirmed unconditional: 'necessarily a mistake' in a claim case, 'a
+    sign of an error' in a defence case - flagged regardless of case type or
+    whether a payment document exists."""
+    with admin_engine.begin() as conn:
+        set_value(conn, firm, "total_paid_by_insurer", "0.00")
+
+    f = fields_by_key(client, headers, firm["case"])["total_paid_by_insurer"]
+    assert "suspicious_zero" in f["attention_reasons"]
+
+
+def test_a_nonzero_payment_is_not_flagged(client, headers, firm, admin_engine):
+    with admin_engine.begin() as conn:
+        set_value(conn, firm, "total_paid_by_insurer", "4300")
+
+    f = fields_by_key(client, headers, firm["case"])["total_paid_by_insurer"]
+    assert "suspicious_zero" not in f["attention_reasons"]
+
+
+def test_canonical_city_folds_known_aliases_only(client, headers, firm):
+    """Confirmed by the firm's lawyer: Tel Aviv / Tel Aviv-Yafo and Nazareth /
+    Nof HaGalil are each the same city under two names - a curated pair, not a
+    general fuzzy match. Where the values actually get folded before two
+    documents are compared is exercised end to end in
+    test_extraction.py::test_a_known_city_alias_is_canonicalised_on_persist.
+    """
+    from app.services.files import canonical_city
+
+    assert canonical_city("תל אביב-יפו") == "תל אביב"
+    assert canonical_city("תל אביב יפו") == "תל אביב"
+    assert canonical_city("נוף הגליל") == "נצרת"
+    # Anything not on the confirmed list passes through untouched - no guessing.
+    assert canonical_city("חיפה") == "חיפה"

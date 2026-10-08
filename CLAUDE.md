@@ -10,6 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 | **DOMAIN.md** | The business: insurance subrogation, the two case types, which document to believe, the deadline rule. None of it is derivable from the code. |
 | **DECISIONS.md** | Every architectural decision with its reasoning and the alternative that was rejected. Read before changing anything that looks odd. |
 | **QUESTIONS.md** | What only the firm can answer. Every assumption the code is currently running on, named so it is not mistaken for a fact. Add to it rather than guessing twice. |
+| **BACKLOG.md** | Things deliberately postponed, not forgotten — with the trigger to come back to each one. |
 
 ## What this is
 

@@ -663,3 +663,158 @@ strong character.
 moved the Hebrew to the wrong end and made the name unreadable; leaving it to
 inherit RTL did the same to the extension. Observed on screen, not reasoned
 about — the first version shipped the mangled version.
+
+---
+
+## 35. Two extraction-error validations, confirmed with the firm
+
+**Chosen:** `plate_matches_id` and `suspicious_zero`, two new `attention_reasons`
+computed in `app/services/review.py`. Neither blocks submission on its own -
+they are attention flags, same mechanism as `low_confidence` -
+`always_needs_review` is the only thing that forces a human look before a field
+can reach a confirmed state.
+
+**Plate = ID:** compared as integers, not strings - `int("56414501") ==
+int("056414501")`. This is the exact shape of the real bug in DOMAIN.md: a
+plate field returned the insured's own ID missing its leading zero. A string
+comparison would have missed it.
+
+**Zero payment:** flagged unconditionally, not only when a payment document
+exists in the case - confirmed by the firm (2026-09-29) as "necessarily a
+mistake" in a claim case and "a sign of an error" in a defence case.
+
+**Confirmed safe with the firm** rather than invented: "regarding
+[flagging] non-identity between plate number and ID in the same case, it
+wouldn't hurt at all - such a glitch could indeed happen."
+
+---
+
+## 36. A curated city-alias table, not a fuzzy match
+
+**Chosen:** `files.canonical_city()`, a short explicit dictionary - currently
+"תל אביב-יפו"/"תל אביב יפו" → "תל אביב", "נוף הגליל" → "נצרת" - applied to
+`court_city` at candidate-persist time, alongside the existing per-type
+overrides (dates, numbers, IDs).
+
+**Why not a general fuzzy match on free text:** the same shape of difference
+that makes two city spellings look like a conflict also shows up in real,
+*important* conflicts - "דוד כהן" vs "דוד כהן-לוי" is the same kind of
+near-miss, and there it is exactly the disagreement the review screen exists
+to surface. A generic similarity threshold would smooth over both alike. A
+curated, confirmed list has no such failure mode: every entry is a fact
+checked with the firm, not a guess from spelling.
+
+**Confirmed, not assumed:** "תל אביב ותל אביב יפו זה אותו דבר... שתיהם שמות של
+אותה עיר" (2026-09-29). Add a pair to `_CITY_ALIASES` only once confirmed the
+same way - never inferred.
+
+**Guarded by:** `test_a_known_city_alias_is_canonicalised_on_persist` (full
+pipeline), `test_canonical_city_folds_known_aliases_only` (the lookup itself).
+
+---
+
+## 37. Reject has no reason field
+
+**Chosen:** `FieldReject` carries only the optimistic-locking token. The
+earlier optional free-text reason was removed.
+
+**Why:** confirmed with the firm (2026-09-29) - the real workflow is binary,
+type the correct value or clear it and leave it blank until someone knows the
+answer. Nothing in that description involves writing down why. The UI reject
+button is now a single click with a native confirmation, matching how document
+deletion already works elsewhere in the app, rather than a second text field
+nobody asked for.
+
+**What did not change:** `extracted_value` is still preserved as the record of
+what the model claimed (DECISIONS 7), and a rejected required field still
+blocks submission (DECISIONS 27) - only the reason text was firm-confirmed as
+unnecessary, not the underlying reject semantics.
+
+---
+
+## 38. The subrogation plaintiff is computed, not extracted
+
+**Chosen:** `extraction._populate_subrogation_plaintiff`, called from
+`resolve_case_fields` alongside `_compute_deadline`. In a claim (subrogation)
+case, `plaintiff_1_name` is filled from `cases.sender_id → senders.name`, with
+confidence 1.0, never asked of the model. `subrogation_letter` no longer maps
+`plaintiff_1_name` for extraction at all - only one mechanism writes this
+field, so there is nothing for the two to disagree about.
+
+**Why:** confirmed by the firm (2026-09-29) - the plaintiff in a subrogation
+case is the referring insurer, "because it is the main recurring client." That
+is known with certainty the moment the case is created; re-deriving it from a
+letter the model reads is strictly less reliable than a fact already sitting
+in the database. Same reasoning as the referral email outranking every other
+source for the fields it carries (DECISIONS 8).
+
+**What stays extracted, deliberately:** `plaintiff_2_name` (the insured, only
+when the claim is also brought in their name - conditional on the letter's
+actual content, not a fixed fact) and `defendant_1_name`/`defendant_2_name`
+(who the demand letter is actually addressed to - the firm's own choice,
+reflected in the letter's own text, not something this system can infer on its
+own). Mapped to `subrogation_letter`, priority 20.
+
+**Not built:** a mechanical rule that picks the defendant automatically
+(insurer alone vs. driver+owner+insurer) was considered and rejected. The
+firm's priority order depends on a judgement - whether the other insurer's
+coverage is in doubt - that no document states as a fact. Guessing it would be
+exactly the "plausible wrong answer" this system is built to avoid
+(DECISIONS 8). The letter's own addressee, read as text, is a fact; the
+decision behind it is not.
+
+**Guarded by:** `test_subrogation_plaintiff_is_populated_from_the_sender`,
+`test_a_defence_case_s_plaintiff_is_not_touched_by_the_sender`,
+`test_a_confirmed_plaintiff_is_never_overwritten_by_the_sender`,
+`test_no_sender_means_no_crash_and_no_value`.
+
+---
+
+## 39. Case creation requires picking a sender
+
+**Chosen:** the frontend's "new case" action is a modal with a required sender
+dropdown (`frontend/src/routes/CasesPage.tsx`), not a single click. The
+backend's `CaseCreate.sender_id` was always optional and still is - this is a
+frontend-only tightening, not a schema or API change.
+
+**Why:** found by inspection, not reported - case creation had no sender
+picker at all, so every case created through the screen had `sender_id = NULL`.
+A case's sender is where the Odcanit main-client prefix comes from
+(DOMAIN.md, "Odcanit"); a case with no sender has nowhere to attach once
+submission exists. Silent at creation time, expensive to notice later.
+
+**The empty-senders case is handled explicitly**, not left to fail: with zero
+active senders the dialog shows a warning and disables the create button,
+rather than submitting `sender_id: null` or crashing on an empty dropdown.
+
+**Not built:** a senders management screen. The firm's own senders list is
+small (Direct Insurance plus a handful of agents) and changes rarely: owners
+create them via `POST /senders` today. A full CRUD UI is reasonable later, not
+necessary now.
+
+---
+
+## 40. One candidate per field per document, even across extraction windows
+
+**Chosen:** `extraction._best_per_field` collapses multiple extraction-window
+results for the same field down to one before insert, keeping the verified
+snippet over an unverified one, then higher confidence, then the earlier page.
+
+**Why - found as a live bug, running the real pipeline against real sample
+cases (2026-10-07):** a 26-page real pleading stated its claim number near the
+top and repeated it lower down. Each 20-page window is extracted
+independently (`PAGE_WINDOW`), and both windows correctly reported the same
+field. `_persist_candidates` inserted both as separate rows - violating
+`uq_field_candidates_doc_field` (one row per document per field, by design,
+since `field_candidates` represents what *one document* said, not what one
+window said) - and the resulting `IntegrityError` failed the **entire
+document** on `db.flush()`, losing every field it would otherwise have
+contributed, not just the duplicate one.
+
+**Never reproduced by a synthetic test before this**, because every scripted
+`FakeLLM` response in the test suite returns a distinct value per window by
+construction - nothing forced two windows to agree on a fact the way a real
+document's own repetition naturally does.
+
+**Guarded by:**
+`test_the_same_field_found_in_two_windows_does_not_crash_the_document`.

@@ -17,6 +17,7 @@ import type {
   Readiness,
   ReviewField,
   ReviewFields,
+  Sender,
   User,
   Uuid,
 } from "./types";
@@ -117,8 +118,14 @@ export const me = () => request<User>("/auth/me");
 export const listCases = () => request<Case[]>("/cases");
 export const getCase = (id: Uuid) => request<Case>(`/cases/${id}`);
 
-export const createCase = (body: { source_email_subject?: string | null }) =>
-  request<Case>("/cases", { method: "POST", body: JSON.stringify(body) });
+export const createCase = (body: {
+  sender_id?: Uuid | null;
+  source_email_subject?: string | null;
+}) => request<Case>("/cases", { method: "POST", body: JSON.stringify(body) });
+
+// ── senders ─────────────────────────────────────────────────────────────────
+
+export const listSenders = () => request<Sender[]>("/senders");
 
 // ── documents ───────────────────────────────────────────────────────────────
 
@@ -175,15 +182,13 @@ export const editField = (
     body: JSON.stringify({ value, expected_updated_at: expected }),
   });
 
-export const rejectField = (
-  caseId: Uuid,
-  fieldId: Uuid,
-  expected: string | null,
-  reason?: string,
-) =>
+// No reason field: confirmed with the firm that the workflow is either type
+// the correct value, or clear this one and leave it blank - no separate
+// written explanation is part of that.
+export const rejectField = (caseId: Uuid, fieldId: Uuid, expected: string | null) =>
   request<ReviewField>(`/cases/${caseId}/fields/${fieldId}/reject`, {
     method: "POST",
-    body: JSON.stringify({ expected_updated_at: expected, reason: reason ?? null }),
+    body: JSON.stringify({ expected_updated_at: expected }),
   });
 
 export const selectCandidate = (

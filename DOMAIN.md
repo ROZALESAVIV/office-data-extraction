@@ -158,18 +158,28 @@ itemised near the end (damage / fees / interest). **The total is what matters** 
 
 ## What is NOT extractable
 
-- **The claim amount in a subrogation case.** There is no pleading, and no
-  document states it in a form worth trusting. Deliberately left to manual
-  entry — this was the firm's decision, not an oversight.
+- **The claim amount in a subrogation case.** Previously: no document states it
+  reliably, deliberately manual. **Revised (2026-09-29):** the firm actually
+  extracts it from two documents in Direct Insurance cases - the insurer's own
+  payment breakdown (`payments_to_claimant`, already mapped) for the insurer's
+  portion, plus a document called **"אישור הפסדים"** (loss confirmation, not
+  yet in the document catalogue) for the insured's portion. When no loss
+  confirmation exists, the insured's loss can usually be derived by
+  cross-referencing the appraiser's report, sometimes also the policy. **Not
+  yet implemented** - the exact computation (is it a sum of the two amounts,
+  or one or the other depending on circumstance?) needs one more round with
+  the firm before this is built; building it from this description alone would
+  be guessing.
 - **The accident narrative** (`גרסאות מטופסי ההודעה`). Free prose, not a value
   anyone can confirm with a click. Deferred to a later version.
 
 ## Parties
 
-- **Plaintiffs: up to 2.** The firm chose this limit; more is a future problem.
-- **Defendants: up to 3**, in practice some subset of the insured, the driver
-  and the insurer — but which subset varies, so the names are extracted from the
-  pleading rather than assumed.
+- **Plaintiffs: up to 2.** Confirmed still sufficient (2026-09-29).
+- **Defendants: up to 3**, confirmed still enough for now, but the firm would
+  like room for **4-5** - chain collisions can mean suing every vehicle behind
+  our own. Not urgent, but a real future schema change (`defendant_4_name`,
+  `defendant_5_name`), not an edge case to dismiss.
 - The insured is frequently a **company** (e.g. `אפי ושות 0202 בע"מ`), in which
   case the driver is necessarily someone else. `insured_name` and
   `our_driver_name` are separate fields for this reason.
@@ -214,8 +224,42 @@ a **sub-case under that main case**.
 This means we do **not** create a client entity per case — it already exists.
 That is what the existing `senders` table with `odcanit_prefix` represents.
 
-Still unknown, and still blocking the submission stage: the actual stored
-procedure signatures and what Odcanit requires as a minimum to open a case.
+**Main client numbers, confirmed by the firm (2026-09-29):**
+
+```
+Direct Insurance (ביטוח ישיר)  555
+Lubit (לוביט)                 1152
+"האודן"                       1555   — spelling unconfirmed, verify
+Reli Insurance (רלי ביטוחים)  1143
+```
+
+**Confirmed: Odcanit requires almost nothing to open a case.** Only the main
+client (e.g. Direct Insurance) — write the client name or main-folder number,
+and Odcanit auto-assigns the next sub-case number under it (main folder `555`,
+last case `555/100` → the next is automatically `555/101`). "In principle you
+can always complete almost any field in Odcanit later." This means our
+"required before submission" list is a **firm workflow standard, not an
+Odcanit technical limit** — see DECISIONS 29.
+
+**Duplicate detection is by Odcanit's own case number**, not by us: you
+literally cannot reopen `555/100` a second time, because that number is the
+identity check. Nothing on our side needs its own dedup logic against Odcanit.
+
+**Documents go into Odcanit too**, into a documents tab that records the
+modification date and the file name. The firm does not see a need to keep
+documents in our own storage once a case is submitted — "all documents stay in
+Odcanit" — which may simplify retention: a deliberate cleanup policy after
+submission is worth designing, rather than storing forever by default. Not yet
+built.
+
+**Server location, confirmed:** on-prem, physically in the firm's office. An
+external backup of all Odcanit data exists. The firm believes outside
+connections are possible with no special security in place — this needs a real
+security assessment before anything connects to it, not just the firm's own
+impression. Technical contact: Ofer (the firm's own IT person).
+
+**Still genuinely unknown, and still blocking the submission stage:** the
+actual stored-procedure signatures for opening an entity and a case.
 
 ## Measured, not estimated
 
@@ -238,65 +282,75 @@ navigation together cut it by roughly 80%.
 
 ## Two known extraction errors
 
-Found on the real run, not yet fixed:
+Found on the real run. Both now flagged for a human on the review screen
+(DECISIONS 35) - the value is never silently corrected or dropped, only
+marked for a second look:
 
 1. **A plate number picked up an ID number.** `third_party_plate_number` came
    back as `56414501`, which is the insured's ID `056414501` without its
    leading zero. An Israeli plate is 7-8 digits and an ID is 9; they look
-   alike. The conflict detector flagged it, but a validation rule would be
-   better - a plate must not equal an ID in the same case.
+   alike. Confirmed by the firm as worth flagging: "such a glitch could
+   indeed happen."
 2. **`total_paid_by_insurer` came back as 0.00** at confidence 0.5, probably
-   an empty column in a table. A zero amount is suspicious when payment
-   documents exist in the case.
+   an empty column in a table. Confirmed by the firm: a zero amount is
+   "necessarily a mistake" in a claim case, "a sign of an error" in a defence
+   case - flagged unconditionally, not only when a payment document exists.
 
-## Claim (subrogation) cases are only half mapped
+## Claim (subrogation) party mapping
 
-**Verified by analysis, not yet by a real extraction run.** Only a defence case
-has been run end to end; the two claim cases in the samples have not.
+**Legal question answered and mapping written (2026-09-29); not yet verified
+against a real extraction run.** Only a defence case has been run end to end
+so far - the two claim cases in the samples have not.
 
-A claim case can currently reach **27 of 45 fields**. None of the missing ones
-is required, and most are missing correctly:
+- **Plaintiff:** `plaintiff_1_name` is the referring insurer - computed
+  directly from the case's sender (`cases.sender_id`), never extracted from a
+  document. It is known with certainty the moment the case is created, so
+  re-deriving it by reading a letter would only add risk. See
+  `extraction._populate_subrogation_plaintiff`, DECISIONS 38. When the suit is
+  also brought in the insured's own name, the insured is `plaintiff_2` -
+  extracted from `subrogation_letter`, since that is conditional on the
+  letter's actual content, not a fixed fact.
+- **Defendant, in priority order:** if there is no doubt the other side's
+  insurer covers the accident, that insurer alone is the defendant. If it is
+  not clear the other insurer covers it, the other driver is added too. If the
+  driver's details are not available, the vehicle's owner is added instead.
+  When suing more than one, the order is **driver, then owner, then the
+  insurer last**. `defendant_1_name`/`defendant_2_name` are mapped to
+  `subrogation_letter`, read as whoever the letter is actually addressed to -
+  the firm's own choice already reflected in the letter's text. **Not
+  automated as a rule**: which of these paths applies depends on the firm's
+  own judgement about insurance coverage, which no document states as a fact
+  - see DECISIONS 38 for why that was deliberately left to the letter's own
+  wording rather than guessed at.
+- Confirmed separately: each main case is one accident. Our own vehicle's
+  plate is constant within one case; the other side can have several vehicles
+  (a chain collision), which can produce one main case plus additional
+  sub-cases, one per claimant, each naming a different vehicle on the other
+  side.
 
-- **Court fields, the case number and the whole deadline chain (9 fields).**
-  The case has not been filed yet, so there is no court, no case number and no
-  deadline. Empty is the right answer, not missing data.
-- **The claim amount.** The firm's decision: no document states it in a form
-  worth trusting, so it stays manual.
-
-**But eight party fields are missing for the wrong reason.** In a defence case
-the plaintiff's address and phone and the defendants' names all come from the
-pleading. A claim case has no pleading, and `subrogation_letter` is mapped only
-to the plaintiff's name and company number.
-
-The information exists - it is being extracted under third-party names:
-
-```
-third_party_owner_name      -> would be the defendant
-third_party_owner_address   -> address for service
-third_party_driver_name     -> possibly a second defendant
-```
-
-**What is blocked is a legal decision, not an engineering one.** In a
-subrogation case:
-
-- Is the plaintiff the insured, or the insurer? Both `insured_name` and
-  `plaintiff_1_name` exist; which one carries which?
-- Is the defendant the vehicle's owner, the driver, or the third party's
-  insurer?
-
-Getting this wrong would open every subrogation case in Odcanit with the wrong
-parties, so it must be answered by the firm before the mapping is written.
+Still to do: run this against a real subrogation case end to end and see what
+the model actually returns for `defendant_1_name`/`defendant_2_name` from a
+real demand letter - the mapping is written, but untested against a real
+document.
 
 ## Open questions
 
 Tracked in **QUESTIONS.md**, with the assumption each one is currently running
-on. Summary:
+on. Answered as of 2026-09-29: who the parties are in a subrogation case,
+required fields before submission, the reject/clear workflow, court-recess
+handling (skip it for now), the filing-date deadline fallback, the plate/ID
+validation, party counts, case volume and SLA. Still open:
 
-- The exact Odcanit stored-procedure contract.
-- Whether court recess should be modelled in the deadline calculation.
+- The exact Odcanit stored-procedure contract - the one remaining hard blocker
+  on the submission stage.
+- The exact claim-amount computation for a subrogation case (see "What is NOT
+  extractable" above) - description given, not yet precise enough to build.
+- Whether investigation reports (`דוחות חקירה`) may be sent to the model at
+  all - the firm flagged "a certain confidentiality obligation" without
+  specifying its source or scope.
 - Three document types the firm judged irrelevant for now: `תביעות-אאה`,
-  `גוף-תשובה ממעתיק ת`, `דוח לוי יצחק`.
-- **Who the parties are in a subrogation case** (see the section above). Blocks
-  eight field mappings and an end-to-end run on a claim case.
-- Whether a plate number should be validated against the IDs in the same case;
-  one real extraction put an ID into the plate field.
+  `גוף-תשובה ממעתיק ת`, `דוח לוי יצחק` - not yet re-confirmed.
+- Exact spelling of the third main client number ("האודן", 1555) - came through
+  garbled in the original answer.
+- Whether the `staff` role should be able to confirm field values - the firm
+  said a clerk does the confirming, and today only `owner`/`lawyer` can.

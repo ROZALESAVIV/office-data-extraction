@@ -7,8 +7,9 @@ calls it and then races another lawyer, must not be able to submit an
 incomplete case.
 """
 
+import re
 import uuid
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 from sqlalchemy import func, text
 from sqlalchemy.orm import Session
@@ -71,10 +72,55 @@ def case_type_of(db: Session, case_id: uuid.UUID) -> str | None:
     return canonical(raw_case_type(db, case_id))
 
 
+# Two extraction errors found on a real run (see DOMAIN.md) - a plate number
+# that was actually the insured's ID missing its leading zero, and a total-paid
+# amount that came back zero from what looks like an empty table cell. Both
+# validation rules confirmed with the firm's lawyer on 2026-09-29: a plate
+# equalling an ID in the same case is always worth a second look, and a zero
+# payment is "necessarily a mistake" in a claim case and "a sign of an error"
+# in a defence case - so it is flagged unconditionally, not only when a
+# payment document exists.
+_ID_FIELD_KEYS = {
+    "plaintiff_1_id", "plaintiff_2_id", "insured_id",
+    "our_driver_id", "third_party_driver_id", "third_party_owner_id",
+}
+_PLATE_FIELD_KEYS = {"insured_plate_number", "third_party_plate_number"}
+_ZERO_SUSPECT_FIELD_KEY = "total_paid_by_insurer"
+
+
+def _digits_as_int(value: str | None) -> int | None:
+    """The numeric value of a digit string, leading zeros and all.
+
+    Comparing as int rather than as text is what catches the real bug: the
+    plate '56414501' and the ID '056414501' are different strings but the same
+    number - exactly the missing-leading-zero failure that was observed.
+    """
+    if not value:
+        return None
+    digits = re.sub(r"[^\d]", "", value)
+    return int(digits) if digits else None
+
+
+def _id_digit_values(fields: list[CaseField], values: dict) -> set[int]:
+    out: set[int] = set()
+    for f in fields:
+        if f.field_key not in _ID_FIELD_KEYS:
+            continue
+        v = values.get(f.id)
+        if v is None:
+            continue
+        n = _digits_as_int(v.value)
+        if n is not None:
+            out.add(n)
+    return out
+
+
 def _attention_reasons(
+    field: CaseField,
     value: CaseFieldValue | None,
     required_here: bool,
     snippet_verified: bool | None,
+    id_digit_values: set[int],
 ) -> list[str]:
     reasons: list[str] = []
     if value is None or _is_empty(value.value):
@@ -92,6 +138,16 @@ def _attention_reasons(
     # would stop meaning anything.
     if snippet_verified is False:
         reasons.append("unverified_snippet")
+    if field.field_key in _PLATE_FIELD_KEYS:
+        n = _digits_as_int(value.value)
+        if n is not None and n in id_digit_values:
+            reasons.append("plate_matches_id")
+    if field.field_key == _ZERO_SUSPECT_FIELD_KEY:
+        try:
+            if Decimal(value.value) == 0:
+                reasons.append("suspicious_zero")
+        except InvalidOperation:
+            pass
     return reasons
 
 
@@ -130,6 +186,7 @@ def field_rows(db: Session, case_id: uuid.UUID) -> list[ReviewFieldOut]:
 
     base_required = {f.field_key for f in fields if f.is_required}
     required_here = required_field_keys(base_required, case_type_of(db, case_id))
+    id_digit_values = _id_digit_values(fields, values)
 
     out: list[ReviewFieldOut] = []
     for f in fields:
@@ -167,7 +224,9 @@ def field_rows(db: Session, case_id: uuid.UUID) -> list[ReviewFieldOut]:
                 reviewed_by=v.reviewed_by if v else None,
                 reviewed_at=v.reviewed_at if v else None,
                 updated_at=v.updated_at if v else None,
-                attention_reasons=_attention_reasons(v, is_required_here, snippet_verified),
+                attention_reasons=_attention_reasons(
+                    f, v, is_required_here, snippet_verified, id_digit_values
+                ),
             )
         )
     return out

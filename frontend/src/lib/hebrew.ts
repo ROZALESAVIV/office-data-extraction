@@ -45,8 +45,14 @@ export const cases = {
   number: "מספר תיק",
   status: "סטטוס",
   created: "נפתח",
+  sender: "מפנה",
   documents: "מסמכים",
   open: "פתיחה",
+  newCaseTitle: "פתיחת תיק חדש",
+  senderLabel: "מי הפנה את התיק",
+  senderPlaceholder: "בחר מפנה",
+  noSenders: "אין עדיין אף מפנה מוגדר במערכת. יש לפנות לבעל המשרד להוספת מפנה לפני פתיחת תיק.",
+  senderRequired: "חובה לבחור מפנה לפני פתיחת התיק",
 };
 
 export const caseStatus: Record<CaseStatus, string> = {
@@ -119,7 +125,7 @@ export const review = {
   confirm: "אישור",
   edit: "עריכה",
   reject: "סימון כשגוי",
-  rejectReason: "סיבה (לא חובה)",
+  rejectConfirm: "הערך הזה שגוי? השדה יתרוקן, ותצטרכו להזין ערך נכון לפני שאפשר יהיה להגיש.",
   saveEdit: "שמירת הערך",
   source: "מקור",
   page: (n: number) => `עמוד ${n}`,
@@ -159,6 +165,8 @@ export const attention: Record<AttentionReason, string> = {
   low_confidence: "ביטחון נמוך",
   unverified_snippet: "ציטוט לא אומת",
   missing_required: "שדה חובה ריק",
+  plate_matches_id: "מספר הרישוי זהה לתעודת זהות בתיק — כדאי לבדוק",
+  suspicious_zero: "סכום אפס — כדאי לוודא שזה לא שגיאה",
 };
 
 // ── readiness ───────────────────────────────────────────────────────────────
