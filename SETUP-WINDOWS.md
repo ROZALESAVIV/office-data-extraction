@@ -329,10 +329,45 @@ cd C:\dev\office-data-extraction\frontend
 npm run dev
 ```
 
-After pulling changes that add a migration (a new file in
-`backend\alembic\versions\`), run `alembic upgrade head` once with the venv
-active. If `requirements.txt` or `package-lock.json` changed, rerun
-`pip install -r requirements.txt` or `npm ci`.
+After pulling changes, with the venv active and from `backend\`:
+
+| What changed | Run |
+|---|---|
+| A new file in `backend\alembic\versions\` (table structure) | `alembic upgrade head` |
+| `backend\app\reference\` (document types, fields, priorities) | `python -m scripts.seed_reference` |
+| `backend\requirements.txt` | `pip install -r requirements.txt` |
+| `frontend\package-lock.json` | `npm ci` (in `frontend\`) |
+
+When unsure, running all of them is safe — each one only applies what is
+missing.
+
+---
+
+## How the database is managed (code-first)
+
+The code is the single source of truth for the database. Nothing is ever
+added to a database by hand.
+
+- **Table structure** lives in the migrations (`backend\alembic\versions\`).
+  `alembic upgrade head` brings any database up to date.
+- **Reference data** — document types, fields, which document supplies which
+  field and at what priority — lives in `backend\app\reference\`.
+  `python -m scripts.seed_reference` loads it into a database.
+
+To add or change a document type or a field:
+
+1. Edit the list in `backend\app\reference\document_types.py` or
+   `case_fields.py`.
+2. Run `python -m scripts.seed_reference` against the **local** dev database
+   and check it works.
+3. Run `pytest`.
+4. Commit and push. The other machine picks it up with the table above.
+5. The shared Supabase database is updated by running the same script against
+   it, deliberately and once — never as part of development. Don't do this
+   unless the user explicitly asks.
+
+Each machine has its own local database, so cases created on one machine
+don't appear on another. That is expected.
 
 ---
 
